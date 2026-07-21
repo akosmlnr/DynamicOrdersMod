@@ -22,7 +22,7 @@ A central `DynamicEconomyCore` singleton owns all mod logic. Thin Harmony patche
 | `Customer.TryGenerateContract` | Prefix | Intercept large orders for dead drop conversion |
 | `Customer.GetWeightedRandomProduct` | Postfix | Adjust orderableQuantity based on scaling engine |
 | `Customer.EvaluateDelivery` | Postfix | Inject tolerance into satisfaction, trigger overdose check |
-| `Customer.ChangeAddiction` | Postfix | Route through tolerance system |
+| `Customer.ChangeAddiction` | Postfix | Reduce addiction gain for high-tolerance customers (tolerance slows addiction) |
 | `TimeManager.EndSleep` | Postfix | Day-end processing: events, tolerance decay, wholesale revenue, dead drop expiry |
 | `MoneyManager.ChangeCashBalance` | Postfix | Track cash flows (debug/info) |
 
@@ -77,6 +77,7 @@ Each customer tracks tolerance (0.0 to 1.0).
 - Increases order quantities (via scaling multiplier)
 - Reduces satisfaction: at 0.5 tolerance, satisfaction reduced by 25%
 - Raises quality expectations: tolerant customers may reject Standard quality even if their `Standards` say Moderate
+- Slows addiction gain: the `ChangeAddiction` patch multiplies addiction delta by `(1 - tolerance × 0.5)`, so a fully tolerant customer gains addiction at half the normal rate
 
 ### Config
 
@@ -140,7 +141,7 @@ Dead drops use the same `EDealWindow` system as normal deals (Morning, Afternoon
 | Event | Chance | Effect |
 |---|---|---|
 | Theft | 3% | Package stolen, no payment, -0.5 relationship, heat +0.3 |
-| Non-payment | 8% (async only) | 30-60% payment, -0.15 relationship, collection quest offered |
+| Non-payment | 8% (async only) | 30-60% payment, -0.15 relationship, a follow-up quest is created using the game's `Quest` system requiring the player to visit the customer to collect the remaining debt |
 | Police intercept | 2% × (1 + heat) | Package confiscated, law intensity +5%, -0.3 relationship, heat +0.5 |
 | Success | Remaining | +0.25 relationship (via satisfaction), heat -0.1 |
 
