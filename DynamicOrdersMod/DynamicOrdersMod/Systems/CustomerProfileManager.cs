@@ -38,7 +38,7 @@ namespace DynamicOrdersMod.Systems
             float ratio = (float)quantity / baseQuantity;
             if (ratio <= 1f) return;
             float gain = (ratio - 1f) * configGain * dependenceMultiplier;
-            profile.Tolerance = Clamp01(profile.Tolerance + gain);
+            profile.Tolerance = Clamp(profile.Tolerance + gain);
         }
 
         public static float ModifyAddictionDelta(CustomerProfile profile, float originalDelta)
@@ -57,7 +57,7 @@ namespace DynamicOrdersMod.Systems
             {
                 float decay = decayBase;
                 if (decay > 0f && profile.Tolerance > 0f)
-                    profile.Tolerance = Clamp01(profile.Tolerance - decay);
+                    profile.Tolerance = Clamp(profile.Tolerance - decay);
                 UpdateHospitalization(profile, currentDay);
             }
         }
@@ -94,7 +94,7 @@ namespace DynamicOrdersMod.Systems
             return true;
         }
 
-        private static float Clamp01(float v)
+        internal static float Clamp(float v)
         {
             if (v < 0f) return 0f;
             return v > 1f ? 1f : v;

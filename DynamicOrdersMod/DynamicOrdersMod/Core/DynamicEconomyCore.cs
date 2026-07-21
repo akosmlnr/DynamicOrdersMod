@@ -32,6 +32,7 @@ namespace DynamicOrdersMod.Core
                 CustomerProfileManager.ApplyDailyDecay(currentDay);
                 DeadDropManager.UpdateHeat();
                 DeadDropManager.UpdateMapLabels();
+                EventManager.RollDailyEvents(currentDay);
                 ProcessWeeklyWholesale(currentDay);
                 SaveManager.Save();
             }

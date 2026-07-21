@@ -77,6 +77,43 @@ namespace DynamicOrdersMod.Patches
             }
         }
 
+        [HarmonyPatch(typeof(Customer), "EvaluateDelivery")]
+        [HarmonyPostfix]
+        static void EvaluateDeliveryPostfix(Customer __instance, float satisfaction)
+        {
+            try
+            {
+                if (!DynamicEconomyCore.Instance?.ScalingEnabled ?? true) return;
+                if (__instance == null) return;
+
+                string guid = __instance.NPC?.GUID.ToString();
+                var profile = CustomerProfileManager.GetOrCreateProfile(guid);
+                if (profile == null) return;
+
+                // Record the purchase
+                profile.RecordPurchase();
+
+                // Tolerance growth (simplified — no access to exact quantity here,
+                // but satisfaction correlates with deal size)
+                float toleranceGain = (1f - satisfaction) * ConfigManager.Config.Tolerance.GainPerDelivery * 2f;
+                profile.Tolerance = CustomerProfileManager.Clamp(profile.Tolerance + toleranceGain);
+
+                // Roll overdose
+                float overdoseChance = EventManager.CalculateOverdoseChance(
+                    profile, 0f, 1f, __instance.CurrentAddiction, 1f);
+                if (overdoseChance > 0f && new System.Random().NextDouble() < overdoseChance)
+                {
+                    int currentDay = 0;
+                    try { currentDay = Il2CppScheduleOne.GameTime.TimeManager.Instance.ElapsedDays; } catch { }
+                    EventManager.ResolveOverdose(profile, currentDay);
+                }
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Error($"[DynamicOrdersMod] EvaluateDelivery error: {ex.Message}");
+            }
+        }
+
         [HarmonyPatch(typeof(Customer), "TryGenerateContract")]
         [HarmonyPrefix]
         static bool TryGenerateContractPrefix(Customer __instance, ref bool __result)
