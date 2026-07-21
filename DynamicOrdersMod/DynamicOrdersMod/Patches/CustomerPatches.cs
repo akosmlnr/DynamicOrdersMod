@@ -4,7 +4,6 @@ using Il2CppScheduleOne.Economy;
 using MelonLoader;
 using DynamicOrdersMod.Core;
 using DynamicOrdersMod.Systems;
-using DynamicOrdersMod.Models;
 
 namespace DynamicOrdersMod.Patches
 {
@@ -90,22 +89,24 @@ namespace DynamicOrdersMod.Patches
                 var profile = CustomerProfileManager.GetOrCreateProfile(guid);
                 if (profile == null) return;
 
-                // Record the purchase
-                profile.RecordPurchase();
+                // Record the purchase (simplified — no access to full deal params here)
+                profile.LifetimeDeals++;
 
                 // Tolerance growth (simplified — no access to exact quantity here,
                 // but satisfaction correlates with deal size)
                 float toleranceGain = (1f - satisfaction) * ConfigManager.Config.Tolerance.GainPerDelivery * 2f;
                 profile.Tolerance = CustomerProfileManager.Clamp(profile.Tolerance + toleranceGain);
 
-                // Roll overdose
-                float overdoseChance = EventManager.CalculateOverdoseChance(
-                    profile, 0f, 1f, __instance.CurrentAddiction, 1f);
-                if (overdoseChance > 0f && (float)UnityEngine.Random.value < overdoseChance)
+                // Roll overdose (skip if day is unavailable to avoid immediate release)
+                int currentDay = 0;
+                try { currentDay = Il2CppScheduleOne.GameTime.TimeManager.Instance.ElapsedDays; }
+                catch { }
+                if (currentDay > 0)
                 {
-                    int currentDay = 0;
-                    try { currentDay = Il2CppScheduleOne.GameTime.TimeManager.Instance.ElapsedDays; } catch { }
-                    EventManager.ResolveOverdose(profile, currentDay);
+                    float overdoseChance = EventManager.CalculateOverdoseChance(
+                        profile, 0f, 1f, __instance.CurrentAddiction, 1f);
+                    if (overdoseChance > 0f && (float)UnityEngine.Random.value < overdoseChance)
+                        EventManager.ResolveOverdose(profile, currentDay);
                 }
             }
             catch (Exception ex)

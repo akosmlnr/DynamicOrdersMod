@@ -9,7 +9,6 @@ namespace DynamicOrdersMod.Systems
     public static class DeadDropManager
     {
         private static bool _initialized;
-        private static readonly List<string> _activeDropGuids = new List<string>();
 
         public static void InitializeDeadDropStates()
         {

@@ -1,7 +1,7 @@
 using System;
 using HarmonyLib;
 using Il2CppScheduleOne.GameTime;
-using MelonLogger;
+using MelonLoader;
 using DynamicOrdersMod.Core;
 
 namespace DynamicOrdersMod.Patches
