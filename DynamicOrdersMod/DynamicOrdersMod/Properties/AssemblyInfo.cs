@@ -1,4 +1,4 @@
-﻿using System.Reflection;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using MelonLoader;
 
@@ -6,10 +6,10 @@ using MelonLoader;
 // set of attributes. Change these attribute values to modify the information
 // associated with an assembly.
 
-[assembly: AssemblyTitle("DynamicOrders&EconomyMod")]
-[assembly: AssemblyConfiguration("Debug")]
-[assembly: AssemblyCompany("DynamicOrders&EconomyMod")]
-[assembly: AssemblyProduct("DynamicOrders&EconomyMod")]
+[assembly: AssemblyTitle("DynamicOrdersMod")]
+[assembly: AssemblyConfiguration("Release")]
+[assembly: AssemblyCompany("DynamicOrdersMod")]
+[assembly: AssemblyProduct("DynamicOrdersMod")]
 
 // Setting ComVisible to false makes the types in this assembly not visible
 // to COM components.  If you need to access a type in this assembly from
@@ -30,8 +30,8 @@ using MelonLoader;
 // by using the '*' as shown below:
 // [assembly: AssemblyVersion("1.0.*")]
 
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
-[assembly: MelonInfo(typeof(DynamicOrdersEconomyMod.DynamicOrdersEconomy), "DynamicOrders&EconomyMod", "0.3.0", "akosmlnr", null)]
+[assembly: AssemblyVersion("3.0.0.0")]
+[assembly: AssemblyFileVersion("3.0.0.0")]
+[assembly: MelonInfo(typeof(DynamicOrdersMod.Core.ModEntry), "DynamicOrdersMod", "3.0.0", "akosmlnr", "Dynamic order scaling, dead drops, tolerance, wholesale, and events")]
 [assembly: MelonGame("TVGS", "Schedule I")]
 [assembly: AssemblyMetadata("NexusModID", "799")]
