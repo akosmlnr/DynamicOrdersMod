@@ -28,7 +28,10 @@ namespace DynamicOrdersMod.Core
             try
             {
                 ConfigManager.Reload();
+                DeadDropManager.InitializeDeadDropStates();
                 CustomerProfileManager.ApplyDailyDecay(currentDay);
+                DeadDropManager.UpdateHeat();
+                DeadDropManager.UpdateMapLabels();
                 SaveManager.Save();
             }
             catch (System.Exception ex)

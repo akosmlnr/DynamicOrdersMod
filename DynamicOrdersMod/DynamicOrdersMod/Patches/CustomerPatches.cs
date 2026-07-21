@@ -4,6 +4,7 @@ using Il2CppScheduleOne.Economy;
 using MelonLoader;
 using DynamicOrdersMod.Core;
 using DynamicOrdersMod.Systems;
+using DynamicOrdersMod.Models;
 
 namespace DynamicOrdersMod.Patches
 {
@@ -61,6 +62,61 @@ namespace DynamicOrdersMod.Patches
             catch (Exception ex)
             {
                 MelonLogger.Error($"[DynamicOrdersMod] ChangeAddiction error: {ex.Message}");
+            }
+        }
+
+        [HarmonyPatch(typeof(Customer), "TryGenerateContract")]
+        [HarmonyPrefix]
+        static bool TryGenerateContractPrefix(Customer __instance, ref bool __result)
+        {
+            try
+            {
+                if (!DynamicEconomyCore.Instance?.ScalingEnabled ?? true) return true; // let original run
+                if (!ConfigManager.Config.DeadDrop.Enabled) return true;
+                if (__instance == null) return true;
+
+                // Get customer data
+                var npc = __instance.NPC;
+                if (npc == null) return true;
+
+                string guid = npc.GUID.ToString();
+                var profile = CustomerProfileManager.GetOrCreateProfile(guid);
+                if (profile == null) return true;
+
+                // Get relationship (normalized 0-1)
+                float normalizedRel = 0f;
+                try { normalizedRel = npc.RelationData?.NormalizedRelationDelta ?? 0f; }
+                catch { }
+                if (normalizedRel < ConfigManager.Config.DeadDrop.MinRelationship) return true;
+
+                // Get quantity to check threshold
+                // We can't easily get "normal quantity" here without calling the original,
+                // so we use a simplified check: if the customer has high tolerance + high relationship,
+                // they become eligible. The actual quantity check happens when the deal is created.
+                if (profile.Tolerance < 0.3f) return true;
+                if (profile.LifetimeDeals < 5) return true;
+
+                // Check cooldown
+                int currentDay = 0;
+                try { currentDay = Il2CppScheduleOne.GameTime.TimeManager.Instance.ElapsedDays; }
+                catch { }
+                if (profile.LastDeadDropFailDay > 0 &&
+                    currentDay - profile.LastDeadDropFailDay < ConfigManager.Config.DeadDrop.TheftCooldownDays)
+                    return true;
+
+                // Customer is eligible for dead drop. We don't block the original contract
+                // generation here — instead, we flag this customer so the contract system
+                // can use dead drop delivery. The actual dead drop assignment happens
+                // when the contract is accepted.
+                //
+                // For now, we let the original method run normally.
+                // Dead drop conversion will be handled by a ContractManager patch in a future task.
+                return true;
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Error($"[DynamicOrdersMod] TryGenerateContract error: {ex.Message}");
+                return true; // never block original on error
             }
         }
     }
