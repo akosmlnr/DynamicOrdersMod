@@ -101,7 +101,7 @@ namespace DynamicOrdersMod.Patches
                 // Roll overdose
                 float overdoseChance = EventManager.CalculateOverdoseChance(
                     profile, 0f, 1f, __instance.CurrentAddiction, 1f);
-                if (overdoseChance > 0f && new System.Random().NextDouble() < overdoseChance)
+                if (overdoseChance > 0f && (float)UnityEngine.Random.value < overdoseChance)
                 {
                     int currentDay = 0;
                     try { currentDay = Il2CppScheduleOne.GameTime.TimeManager.Instance.ElapsedDays; } catch { }

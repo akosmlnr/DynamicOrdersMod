@@ -75,9 +75,9 @@ namespace DynamicOrdersMod.Core
                         if (moneyManager != null)
                             moneyManager.ChangeCashBalance(totalRevenue, false, false);
                     }
-            catch (System.Exception ex)
-            {
-                MelonLogger.Warning($"[DynamicOrdersMod] Wholesale revenue deposit failed: {ex.Message}");
+                    catch (System.Exception ex)
+                    {
+                        MelonLogger.Warning($"[DynamicOrdersMod] Wholesale revenue deposit failed: {ex.Message}");
                     }
 
                     if (ConfigManager.Config.General.DebugLogging)
