@@ -30,6 +30,9 @@ namespace DynamicOrdersMod.Models
         public int LastOverdoseRefusalDay;
         public List<string> DiscoveredDeadDrops = new List<string>();
         public int LastDeadDropFailDay;
+        public string ActiveDeadDropGuid;
+        public bool ActiveDeadDropIsPrepaid;
+        public bool ActiveDeadDropPendingCompletion;
         public List<PurchaseRecord> PurchaseHistory = new List<PurchaseRecord>();
         private const int MaxHistoryEntries = 50;
 

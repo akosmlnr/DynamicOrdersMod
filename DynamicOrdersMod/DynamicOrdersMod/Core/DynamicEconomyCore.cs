@@ -59,12 +59,19 @@ namespace DynamicOrdersMod.Core
                     if (!profile.IsWholesale) continue;
                     if (!CustomerProfileManager.IsCustomerAvailable(profile, currentDay)) continue;
 
-                    // Base weekly revenue estimate: $50-200 per wholesale customer
-                    // This is a simplified model — real implementation would
-                    // track actual sales through the MoneyManager patch.
+                    profile.WholesaleWeeksActive++;
+
                     float baseRevenue = 100f * profile.Tolerance;
                     float cut = baseRevenue * config.WeeklyRevenueCut;
                     totalRevenue += cut;
+
+                    // Track actual revenue via WholesaleRecord
+                    SaveManager.Data.WholesaleRecords.Add(new Models.WholesaleRecord
+                    {
+                        Week = currentDay / 7,
+                        CustomerGuid = profile.CustomerGuid,
+                        Amount = cut
+                    });
                 }
 
                 if (totalRevenue > 0f)
@@ -83,6 +90,17 @@ namespace DynamicOrdersMod.Core
                     if (ConfigManager.Config.General.DebugLogging)
                         MelonLogger.Msg($"[DynamicOrdersMod] Weekly wholesale revenue: ${totalRevenue:F2}");
                 }
+
+                // Trim old wholesale records (keep last 52 weeks)
+                try
+                {
+                    if (SaveManager.Data.WholesaleRecords.Count > 520)
+                    {
+                        int minWeek = (currentDay / 7) - 52;
+                        SaveManager.Data.WholesaleRecords.RemoveAll(r => r.Week < minWeek);
+                    }
+                }
+                catch { }
             }
             catch (System.Exception ex)
             {

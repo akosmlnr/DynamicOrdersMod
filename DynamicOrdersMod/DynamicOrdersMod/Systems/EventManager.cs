@@ -30,7 +30,7 @@ namespace DynamicOrdersMod.Systems
             {
                 int duration = RngRange(config.CrackdownDurationDays.Min, config.CrackdownDurationDays.Max);
                 // Pick a random region — use empty string for "all regions"
-                string[] regions = { "Downtown", "Uptown", "Suburbs", "Industrial", "" };
+                string[] regions = { "Northtown", "Westville", "Downtown", "Docks", "Suburbia", "Uptown", "" };
                 string region = regions[_rng.Next(regions.Length)];
 
                 SaveManager.Data.ActiveEvents.Add(new ActiveEvent

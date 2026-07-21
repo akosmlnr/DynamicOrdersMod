@@ -67,6 +67,35 @@ namespace DynamicOrdersMod.Systems
             if (profile.IsHospitalized && currentDay >= profile.HospitalReleaseDay)
             {
                 profile.IsHospitalized = false;
+
+                // Task 4: Apply relationship consequences on hospital release
+                var config = ConfigManager.Config.Overdose;
+                try
+                {
+                    var customers = Il2CppScheduleOne.Economy.Customer.UnlockedCustomers;
+                    if (customers != null)
+                    {
+                        for (int i = 0; i < customers.Count; i++)
+                        {
+                            var cust = customers[i];
+                            if (cust == null) continue;
+                            string guid = null;
+                            try { guid = cust.NPC?.GUID.ToString(); } catch { }
+                            if (guid == profile.CustomerGuid)
+                            {
+                                float hit = config.HospitalRelationshipDecay + config.ReleaseRelationshipHit;
+                                if (hit > 0f)
+                                    cust.NPC.RelationData.ChangeRelationship(-hit);
+                                break;
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    MelonLogger.Warning($"[DynamicOrdersMod] Hospital release relationship error: {ex.Message}");
+                }
+
                 if (ConfigManager.Config.General.DebugLogging)
                     MelonLogger.Msg($"[DynamicOrdersMod] {profile.CustomerGuid} released from hospital.");
             }

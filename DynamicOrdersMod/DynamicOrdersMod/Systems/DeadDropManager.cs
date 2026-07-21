@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using MelonLoader;
 using DynamicOrdersMod.Models;
 using DynamicOrdersMod.Persistence;
+using Il2CppScheduleOne.Quests;
 
 namespace DynamicOrdersMod.Systems
 {
@@ -30,7 +31,7 @@ namespace DynamicOrdersMod.Systems
                     {
                         DropGuid = guid,
                         DropName = drop.name ?? "Unknown Drop",
-                        Region = "",  // Populated if available from game object
+                        Region = drop.Region?.ToString() ?? "",
                         Heat = 0f,
                         IsDiscovered = false,
                         IsOccupied = false
@@ -92,7 +93,7 @@ namespace DynamicOrdersMod.Systems
         /// Resolves a dead drop after the deal window closes.
         /// Returns: "success", "theft", "nonpayment", "police", or "expired"
         /// </summary>
-        public static string ResolveDeadDrop(string dropGuid, bool isPrepaid, bool wasDelivered)
+        public static string ResolveDeadDrop(string dropGuid, bool isPrepaid, bool wasDelivered, CustomerProfile profile)
         {
             var config = ConfigManager.Config.DeadDrop;
             var state = GetState(dropGuid);
@@ -103,16 +104,26 @@ namespace DynamicOrdersMod.Systems
             if (!wasDelivered)
             {
                 // Missed window — handled by caller for relationship
+                SaveManager.Data.Statistics.TotalDeadDropsFailed++;
+                if (profile != null) profile.RecordFailure();
                 return "expired";
             }
 
             // Event rolls
-            // Police intercept: 2% * (1 + heat)
-            float policeChance = config.PoliceInterceptBaseChance * (1f + state.Heat);
-            // Check if crackdown active — would multiply further (handled by EventManager later)
+            // Police intercept: base chance * (1 + heat) * crackdown multiplier
+            float crackdownMult = 1f;
+            try
+            {
+                if (EventManager.IsCrackdownActive(state.Region))
+                    crackdownMult = ConfigManager.Config.Events.CrackdownDeadDropRiskMultiplier;
+            }
+            catch { }
+            float policeChance = config.PoliceInterceptBaseChance * (1f + state.Heat) * crackdownMult;
             if (RngNext() < policeChance)
             {
                 state.Heat = Clamp01(state.Heat + 0.5f);
+                SaveManager.Data.Statistics.TotalDeadDropsFailed++;
+                if (profile != null) profile.RecordFailure();
                 return "police";
             }
 
@@ -120,12 +131,16 @@ namespace DynamicOrdersMod.Systems
             if (RngNext() < config.TheftChance)
             {
                 state.Heat = Clamp01(state.Heat + 0.3f);
+                SaveManager.Data.Statistics.TotalDeadDropsFailed++;
+                if (profile != null) profile.RecordFailure();
                 return "theft";
             }
 
             // Non-payment: 8% async only
             if (!isPrepaid && RngNext() < config.NonPaymentChance)
             {
+                SaveManager.Data.Statistics.TotalDeadDropsFailed++;
+                if (profile != null) profile.RecordFailure();
                 return "nonpayment";
             }
 
@@ -226,6 +241,58 @@ namespace DynamicOrdersMod.Systems
         {
             var state = GetState(dropGuid);
             return state?.Heat ?? 0f;
+        }
+
+        /// <summary>
+        /// Attempt to spawn discovery quests for undiscovered dead drops.
+        /// Called when a customer first becomes dead-drop eligible.
+        /// </summary>
+        public static void TrySpawnDiscoveryQuests(int count, CustomerProfile profile)
+        {
+            if (SaveManager.Data?.DeadDropStates == null) return;
+            if (profile == null) return;
+
+            var undiscovered = new List<string>();
+            foreach (var kvp in SaveManager.Data.DeadDropStates)
+            {
+                if (!kvp.Value.IsDiscovered)
+                    undiscovered.Add(kvp.Key);
+            }
+
+            if (undiscovered.Count == 0) return;
+
+            // Shuffle and take up to count
+            for (int i = undiscovered.Count - 1; i > 0; i--)
+            {
+                int j = _rng.Next(i + 1);
+                string tmp = undiscovered[i];
+                undiscovered[i] = undiscovered[j];
+                undiscovered[j] = tmp;
+            }
+
+            int toDiscover = Math.Min(count, undiscovered.Count);
+            try
+            {
+                var questManager = Il2CppScheduleOne.Quests.QuestManager.Instance;
+                if (questManager == null) return;
+
+                for (int i = 0; i < toDiscover; i++)
+                {
+                    string dropGuid = undiscovered[i];
+                    var quest = questManager.CreateDeaddropCollectionQuest(dropGuid);
+                    if (quest != null)
+                    {
+                        quest.Begin();
+                        var state = GetState(dropGuid);
+                        if (state != null) state.IsDiscovered = true;
+                        profile.DiscoveredDeadDrops.Add(dropGuid);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Warning($"[DynamicOrdersMod] Discovery quest spawn failed: {ex.Message}");
+            }
         }
 
         // --- Helpers ---

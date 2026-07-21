@@ -1,8 +1,14 @@
 using System;
+using System.Collections.Generic;
 using HarmonyLib;
 using Il2CppScheduleOne.Economy;
+using Il2CppScheduleOne.GameTime;
+using Il2CppScheduleOne.ItemFramework;
+using Il2CppScheduleOne.Product;
+using Il2CppScheduleOne.Quests;
 using MelonLoader;
 using DynamicOrdersMod.Core;
+using DynamicOrdersMod.Persistence;
 using DynamicOrdersMod.Systems;
 
 namespace DynamicOrdersMod.Patches
@@ -25,6 +31,13 @@ namespace DynamicOrdersMod.Patches
                     __instance.NPC?.GUID.ToString());
                 if (profile == null) return;
 
+                // Task 5: Skip scaling for hospitalized or refusing customers
+                int currentDay = 0;
+                try { currentDay = TimeManager.Instance.ElapsedDays; }
+                catch { }
+                if (currentDay > 0 && !CustomerProfileManager.IsCustomerAvailable(profile, currentDay))
+                    return;
+
                 float addiction = __instance.CurrentAddiction;
                 float normalizedRel = 0f;
                 try { normalizedRel = __instance.NPC?.RelationData?.NormalizedRelationDelta ?? 0f; }
@@ -33,6 +46,10 @@ namespace DynamicOrdersMod.Patches
                 int scaled = ScalingEngine.CalculateScaledQuantity(
                     orderableQuantity, addiction, normalizedRel, profile.Tolerance,
                     ConfigManager.Config.Scaling);
+
+                // Task 2: Apply event order reduction (crackdown/shortage)
+                float reduction = EventManager.GetOrderReduction("", "");
+                scaled = Math.Max(1, (int)(scaled * reduction));
 
                 // Wholesale multiplier: bulk orders from wholesale-eligible customers
                 if (CustomerProfileManager.MeetsWholesaleRequirements(profile) &&
@@ -43,6 +60,9 @@ namespace DynamicOrdersMod.Patches
                     {
                         profile.IsWholesale = true;
                         profile.WholesaleWeeksActive = 0;
+                        // Task 7: Immediate save on wholesale status change
+                        try { SaveManager.Save(); }
+                        catch { }
                     }
                 }
 
@@ -78,7 +98,15 @@ namespace DynamicOrdersMod.Patches
 
         [HarmonyPatch(typeof(Customer), "EvaluateDelivery")]
         [HarmonyPostfix]
-        static void EvaluateDeliveryPostfix(Customer __instance, float satisfaction)
+        static void EvaluateDeliveryPostfix(
+            Customer __instance,
+            Contract contract,
+            List<ItemInstance> providedItems,
+            ref float highestAddiction,
+            ref EDrugType mainTypeType,
+            ref int matchedProductCount,
+            ref float qualityDifference,
+            ref float __result)
         {
             try
             {
@@ -89,24 +117,79 @@ namespace DynamicOrdersMod.Patches
                 var profile = CustomerProfileManager.GetOrCreateProfile(guid);
                 if (profile == null) return;
 
-                // Record the purchase (simplified — no access to full deal params here)
-                profile.LifetimeDeals++;
-
-                // Tolerance growth (simplified — no access to exact quantity here,
-                // but satisfaction correlates with deal size)
-                float toleranceGain = (1f - satisfaction) * ConfigManager.Config.Tolerance.GainPerDelivery * 2f;
-                profile.Tolerance = CustomerProfileManager.Clamp(profile.Tolerance + toleranceGain);
-
-                // Roll overdose (skip if day is unavailable to avoid immediate release)
                 int currentDay = 0;
-                try { currentDay = Il2CppScheduleOne.GameTime.TimeManager.Instance.ElapsedDays; }
+                try { currentDay = TimeManager.Instance.ElapsedDays; }
                 catch { }
-                if (currentDay > 0)
+                if (currentDay <= 0) return;
+
+                float satisfaction = __result;
+                string drugType = mainTypeType.ToString();
+
+                // Quality expectation shift: high-tolerance customers are less satisfied
+                // with the same quality. Negative qualityDifference = quality below customer expectation.
+                var toleranceConfig = ConfigManager.Config.Tolerance;
+                if (toleranceConfig.QualityExpectationShift && profile.Tolerance > 0f && qualityDifference < 0f)
                 {
-                    float overdoseChance = EventManager.CalculateOverdoseChance(
-                        profile, 0f, 1f, __instance.CurrentAddiction, 1f);
-                    if (overdoseChance > 0f && (float)UnityEngine.Random.value < overdoseChance)
-                        EventManager.ResolveOverdose(profile, currentDay);
+                    float penalty = toleranceConfig.SatisfactionPenaltyScale * profile.Tolerance;
+                    satisfaction *= (1f - penalty);
+                    if (satisfaction < 0f) satisfaction = 0f;
+                    __result = satisfaction;
+                }
+
+                // Record the purchase with real deal data
+                float payment = 0f;
+                int orderableQuantity = 1;
+                try { payment = contract?.Payment ?? 0f; } catch { }
+                try { orderableQuantity = contract?.ProductList?.GetTotalQuantity() ?? 1; } catch { }
+                profile.RecordPurchase(currentDay, drugType, matchedProductCount, payment);
+                profile.RecordSuccess();
+
+                // Tolerance growth using actual quantity ratio
+                CustomerProfileManager.ApplyToleranceGrowth(
+                    profile, matchedProductCount, orderableQuantity, __instance.CurrentAddiction);
+
+                // Overdose roll using real quality and addiction data
+                float overdoseChance = EventManager.CalculateOverdoseChance(
+                    profile, qualityDifference, 1f, __instance.CurrentAddiction, 1f);
+                if (overdoseChance > 0f && (float)UnityEngine.Random.value < overdoseChance)
+                {
+                    bool overdosed = EventManager.ResolveOverdose(profile, currentDay);
+                    if (overdosed)
+                    {
+                        // Task 4: Apply relationship consequences for 2nd+ overdose
+                        var overdoseConfig = ConfigManager.Config.Overdose;
+                        if (profile.OverdoseCount >= 2)
+                        {
+                            try
+                            {
+                                __instance.NPC.RelationData.ChangeRelationship(
+                                    -overdoseConfig.SecondOverdoseRelationshipHit);
+                            }
+                            catch { }
+                        }
+
+                        // Task 7: Immediate save on overdose
+                        try { SaveManager.Save(); }
+                        catch { }
+                    }
+                }
+
+                // Task 3 continuation: Handle dead drop completion relationship bonus
+                if (profile.ActiveDeadDropPendingCompletion)
+                {
+                    profile.ActiveDeadDropPendingCompletion = false;
+                    var ddConfig = ConfigManager.Config.DeadDrop;
+                    if (ddConfig.SuccessRelationshipBonus > 0f)
+                    {
+                        try
+                        {
+                            __instance.NPC.RelationData.ChangeRelationship(ddConfig.SuccessRelationshipBonus);
+                        }
+                        catch { }
+                    }
+                    SaveManager.Data.Statistics.TotalDeadDropsCompleted++;
+                    try { SaveManager.Save(); }
+                    catch { }
                 }
             }
             catch (Exception ex)
@@ -116,57 +199,108 @@ namespace DynamicOrdersMod.Patches
         }
 
         [HarmonyPatch(typeof(Customer), "TryGenerateContract")]
-        [HarmonyPrefix]
-        static bool TryGenerateContractPrefix(Customer __instance, ref bool __result)
+        [HarmonyPostfix]
+        static void TryGenerateContractPostfix(Customer __instance, Dealer dealer, ref ContractInfo __result)
         {
             try
             {
-                if (!DynamicEconomyCore.Instance?.ScalingEnabled ?? true) return true; // let original run
-                if (!ConfigManager.Config.DeadDrop.Enabled) return true;
-                if (__instance == null) return true;
+                if (!DynamicEconomyCore.Instance?.ScalingEnabled ?? true) return;
+                if (!ConfigManager.Config.DeadDrop.Enabled) return;
+                if (__instance == null || __result == null) return;
 
-                // Get customer data
                 var npc = __instance.NPC;
-                if (npc == null) return true;
+                if (npc == null) return;
 
                 string guid = npc.GUID.ToString();
                 var profile = CustomerProfileManager.GetOrCreateProfile(guid);
-                if (profile == null) return true;
+                if (profile == null) return;
 
-                // Get relationship (normalized 0-1)
+                // Check relationship
                 float normalizedRel = 0f;
                 try { normalizedRel = npc.RelationData?.NormalizedRelationDelta ?? 0f; }
                 catch { }
-                if (normalizedRel < ConfigManager.Config.DeadDrop.MinRelationship) return true;
+                if (normalizedRel < ConfigManager.Config.DeadDrop.MinRelationship) return;
 
-                // Get quantity to check threshold
-                // We can't easily get "normal quantity" here without calling the original,
-                // so we use a simplified check: if the customer has high tolerance + high relationship,
-                // they become eligible. The actual quantity check happens when the deal is created.
-                if (profile.Tolerance < 0.3f) return true;
-                if (profile.LifetimeDeals < 5) return true;
+                // Check tolerance and deal count thresholds
+                if (profile.Tolerance < 0.3f) return;
+                if (profile.LifetimeDeals < 5) return;
 
                 // Check cooldown
                 int currentDay = 0;
-                try { currentDay = Il2CppScheduleOne.GameTime.TimeManager.Instance.ElapsedDays; }
+                try { currentDay = TimeManager.Instance.ElapsedDays; }
                 catch { }
                 if (profile.LastDeadDropFailDay > 0 &&
                     currentDay - profile.LastDeadDropFailDay < ConfigManager.Config.DeadDrop.TheftCooldownDays)
-                    return true;
+                    return;
 
-                // Customer is eligible for dead drop. We don't block the original contract
-                // generation here — instead, we flag this customer so the contract system
-                // can use dead drop delivery. The actual dead drop assignment happens
-                // when the contract is accepted.
-                //
-                // For now, we let the original method run normally.
-                // Dead drop conversion will be handled by a ContractManager patch in a future task.
-                return true;
+                // Customer is eligible — select a dead drop
+                string selectedDrop = DeadDropManager.SelectDropForAsync();
+                if (selectedDrop == null) return;
+
+                var ddConfig = ConfigManager.Config.DeadDrop;
+
+                // Decide prepaid vs async
+                bool isPrepaid = (float)UnityEngine.Random.value < ddConfig.PrepaidChance;
+
+                // Store assignment on profile for later resolution
+                profile.ActiveDeadDropGuid = selectedDrop;
+                profile.ActiveDeadDropIsPrepaid = isPrepaid;
+                profile.ActiveDeadDropPendingCompletion = true;
+
+                // Swap delivery location to dead drop
+                __result.DeliveryLocationGUID = selectedDrop;
+
+                // Apply async price premium
+                if (!isPrepaid)
+                {
+                    float premium = ddConfig.AsyncPremiumMin +
+                        (ddConfig.AsyncPremiumMax - ddConfig.AsyncPremiumMin) * (float)UnityEngine.Random.value;
+                    __result.Payment *= (1f + premium);
+                }
+
+                // Wire PricingEngine: apply loyalty discount, addiction premium, market fluctuation, events
+                try
+                {
+                    string drugName = "";
+                    try
+                    {
+                        if (__result.Products?.entries != null && __result.Products.entries.Count > 0)
+                            drugName = __result.Products.entries[0].ProductID ?? "";
+                    }
+                    catch { }
+
+                    __result.Payment = PricingEngine.CalculateCustomerPrice(
+                        __result.Payment,
+                        __instance.CurrentAddiction,
+                        profile.SuccessfulDeals,
+                        ConfigManager.Config.Pricing,
+                        SaveManager.Data.ActiveEvents,
+                        drugName,
+                        ConfigManager.Events.ShortagePriceIncrease);
+                }
+                catch (Exception ex)
+                {
+                    if (ConfigManager.Config.General.DebugLogging)
+                        MelonLogger.Warning($"[DynamicOrdersMod] Pricing engine error: {ex.Message}");
+                }
+
+                // Task 8: Discovery quests on first dead drop eligibility
+                if (ddConfig.DiscoveryQuestEnabled && profile.DiscoveredDeadDrops.Count == 0)
+                {
+                    try
+                    {
+                        DeadDropManager.TrySpawnDiscoveryQuests(
+                            ddConfig.DiscoveryLocationsCount, profile);
+                    }
+                    catch (Exception ex)
+                    {
+                        MelonLogger.Warning($"[DynamicOrdersMod] Discovery quest error: {ex.Message}");
+                    }
+                }
             }
             catch (Exception ex)
             {
                 MelonLogger.Error($"[DynamicOrdersMod] TryGenerateContract error: {ex.Message}");
-                return true; // never block original on error
             }
         }
     }
