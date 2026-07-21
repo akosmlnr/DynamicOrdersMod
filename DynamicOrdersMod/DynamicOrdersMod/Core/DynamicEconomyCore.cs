@@ -1,11 +1,14 @@
 using MelonLoader;
 using DynamicOrdersMod.Persistence;
+using DynamicOrdersMod.Systems;
 
 namespace DynamicOrdersMod.Core
 {
     public class DynamicEconomyCore
     {
         public static DynamicEconomyCore Instance { get; private set; }
+        public bool IsInitialized { get; private set; }
+        public bool ScalingEnabled => ConfigManager.Config?.General.Enabled ?? false;
 
         public static void Initialize()
         {
@@ -14,13 +17,34 @@ namespace DynamicOrdersMod.Core
 
             ConfigManager.Load();
             SaveManager.Load();
-
+            Instance.IsInitialized = true;
             MelonLogger.Msg("[DynamicOrdersMod] Core initialized.");
         }
 
         public void OnDayEnd(int currentDay)
         {
-            // Will be expanded in later tasks
+            if (!IsInitialized || !ScalingEnabled) return;
+            if (!IsHost()) return;
+            try
+            {
+                ConfigManager.Reload();
+                CustomerProfileManager.ApplyDailyDecay(currentDay);
+                SaveManager.Save();
+            }
+            catch (System.Exception ex)
+            {
+                MelonLogger.Error($"[DynamicOrdersMod] OnDayEnd error: {ex.Message}");
+            }
+        }
+
+        private static bool IsHost()
+        {
+            try
+            {
+                var lobby = Il2CppScheduleOne.Networking.Lobby.Instance;
+                return lobby != null && lobby.IsHost;
+            }
+            catch { return true; }
         }
     }
 }
