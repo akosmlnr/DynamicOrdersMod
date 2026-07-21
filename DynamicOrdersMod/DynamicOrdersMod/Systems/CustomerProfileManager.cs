@@ -1,1 +1,89 @@
-namespace DynamicOrdersMod.Systems { }
+using System;
+using MelonLoader;
+using DynamicOrdersMod.Models;
+using DynamicOrdersMod.Persistence;
+
+namespace DynamicOrdersMod.Systems
+{
+    public static class CustomerProfileManager
+    {
+        public static CustomerProfile GetOrCreateProfile(string customerGuid)
+        {
+            if (SaveManager.Data == null) return null;
+            if (string.IsNullOrEmpty(customerGuid)) return null;
+
+            CustomerProfile profile;
+            if (SaveManager.Data.CustomerProfiles.TryGetValue(customerGuid, out profile))
+                return profile;
+
+            profile = new CustomerProfile
+            {
+                CustomerGuid = customerGuid,
+                Tolerance = 0f, ScalingMultiplier = 1f,
+                LifetimeDeals = 0, SuccessfulDeals = 0, FailedDeals = 0,
+                IsWholesale = false, WholesaleWeeksActive = 0,
+                OverdoseCount = 0, LastOverdoseDay = -1,
+                IsHospitalized = false, HospitalReleaseDay = -1,
+                LastOverdoseRefusalDay = -1, LastDeadDropFailDay = -1
+            };
+            SaveManager.Data.CustomerProfiles[customerGuid] = profile;
+            return profile;
+        }
+
+        public static void ApplyToleranceGrowth(
+            CustomerProfile profile, int quantity, int baseQuantity, float dependenceMultiplier)
+        {
+            if (profile == null || baseQuantity <= 0) return;
+            float configGain = ConfigManager.Config.Tolerance.GainPerDelivery;
+            float ratio = (float)quantity / baseQuantity;
+            if (ratio <= 1f) return;
+            float gain = (ratio - 1f) * configGain * dependenceMultiplier;
+            profile.Tolerance = Clamp01(profile.Tolerance + gain);
+        }
+
+        public static float ModifyAddictionDelta(CustomerProfile profile, float originalDelta)
+        {
+            if (profile == null || originalDelta <= 0f) return originalDelta;
+            float modifier = 1f - profile.Tolerance * 0.5f;
+            return originalDelta * modifier;
+        }
+
+        public static void ApplyDailyDecay(int currentDay)
+        {
+            if (SaveManager.Data == null) return;
+            float decayBase = ConfigManager.Config.Tolerance.DailyDecayBase;
+
+            foreach (var profile in SaveManager.Data.CustomerProfiles.Values)
+            {
+                float decay = decayBase;
+                if (decay > 0f && profile.Tolerance > 0f)
+                    profile.Tolerance = Clamp01(profile.Tolerance - decay);
+                UpdateHospitalization(profile, currentDay);
+            }
+        }
+
+        private static void UpdateHospitalization(CustomerProfile profile, int currentDay)
+        {
+            if (profile.IsHospitalized && currentDay >= profile.HospitalReleaseDay)
+            {
+                profile.IsHospitalized = false;
+                if (ConfigManager.Config.General.DebugLogging)
+                    MelonLogger.Msg($"[DynamicOrdersMod] {profile.CustomerGuid} released from hospital.");
+            }
+        }
+
+        public static bool IsCustomerAvailable(CustomerProfile profile, int currentDay)
+        {
+            if (profile == null) return false;
+            if (profile.IsHospitalized) return false;
+            if (profile.LastOverdoseRefusalDay > 0 && currentDay < profile.LastOverdoseRefusalDay) return false;
+            return true;
+        }
+
+        private static float Clamp01(float v)
+        {
+            if (v < 0f) return 0f;
+            return v > 1f ? 1f : v;
+        }
+    }
+}
