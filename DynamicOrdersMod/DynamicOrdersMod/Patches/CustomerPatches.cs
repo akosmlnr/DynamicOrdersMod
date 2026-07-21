@@ -35,6 +35,18 @@ namespace DynamicOrdersMod.Patches
                     orderableQuantity, addiction, normalizedRel, profile.Tolerance,
                     ConfigManager.Config.Scaling);
 
+                // Wholesale multiplier: bulk orders from wholesale-eligible customers
+                if (CustomerProfileManager.MeetsWholesaleRequirements(profile) &&
+                    normalizedRel >= ConfigManager.Config.Wholesale.MinRelationship)
+                {
+                    scaled = (int)(scaled * ConfigManager.Config.Wholesale.BulkOrderMultiplier);
+                    if (!profile.IsWholesale)
+                    {
+                        profile.IsWholesale = true;
+                        profile.WholesaleWeeksActive = 0;
+                    }
+                }
+
                 if (scaled != orderableQuantity) orderableQuantity = scaled;
             }
             catch (Exception ex)

@@ -80,6 +80,20 @@ namespace DynamicOrdersMod.Systems
             return true;
         }
 
+        /// <summary>
+        /// Checks if a customer meets wholesale criteria (excluding live relationship).
+        /// Caller should check relationship separately.
+        /// </summary>
+        public static bool MeetsWholesaleRequirements(CustomerProfile profile)
+        {
+            if (profile == null) return false;
+            var config = ConfigManager.Config.Wholesale;
+            if (!config.Enabled) return false;
+            if (profile.LifetimeDeals < config.MinCompletedDeals) return false;
+            if (profile.Tolerance < config.MinTolerance) return false;
+            return true;
+        }
+
         private static float Clamp01(float v)
         {
             if (v < 0f) return 0f;
