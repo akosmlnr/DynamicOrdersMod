@@ -42,6 +42,9 @@
     <Reference Include="Il2CppFishNet.Runtime">
       <HintPath>D:\SteamLibrary\steamapps\common\Schedule I\MelonLoader\Il2CppAssemblies\Il2CppFishNet.Runtime.dll</HintPath>
     </Reference>
+    <Reference Include="Il2CppScheduleOne.Core">
+      <HintPath>D:\SteamLibrary\steamapps\common\Schedule I\MelonLoader\Il2CppAssemblies\Il2CppScheduleOne.Core.dll</HintPath>
+    </Reference>
     <Reference Include="Il2CppInterop.Runtime">
       <HintPath>D:\SteamLibrary\steamapps\common\Schedule I\MelonLoader\net6\Il2CppInterop.Runtime.dll</HintPath>
     </Reference>

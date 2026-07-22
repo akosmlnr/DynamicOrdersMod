@@ -210,13 +210,10 @@ namespace DynamicOrdersMod.Systems
             catch { }
             if (storage == null || storage.ItemSlots == null) return result;
 
-            // First use the storage's own GetQuantityOfItem for reliable quantity sum
-            // (this handles stacking correctly across slots)
+            // StorageEntity has no GetQuantityOfItem; iterate slots and sum quantities ourselves.
+            // Use ItemInstance.GetItemData() to get the canonical ID + Quantity without depending
+            // on BaseItemDefinition (which lives in a separate Il2CppScheduleOne.Core assembly).
             int actualQty = 0;
-            try { actualQty = storage.GetQuantityOfItem(expectedProductID); }
-            catch { }
-
-            // Then iterate slots to find the highest quality of the matching product
             int highestQuality = -1;
             bool foundWrongProduct = false;
 
@@ -229,22 +226,19 @@ namespace DynamicOrdersMod.Systems
                 if (item == null) continue;
 
                 string productID = "";
-                int quality = -1;
+                int slotQuantity = 0;
                 try
                 {
-                    var def = item.Definition;
-                    if (def != null)
+                    var data = item.GetItemData();
+                    if (data != null)
                     {
-                        // ID is on BaseItemDefinition (parent of ItemDefinition)
-                        // Use GetSaveString or ID via reflection-safe property access
-                        try { productID = def.ID; } catch { }
-                        if (string.IsNullOrEmpty(productID))
-                        {
-                            try { productID = def.name; } catch { } // fallback to ScriptableObject name
-                        }
+                        productID = data.ID ?? "";
+                        slotQuantity = data.Quantity;
                     }
                 }
                 catch { }
+
+                int quality = -1;
                 try
                 {
                     var qualityItem = item as Il2CppScheduleOne.ItemFramework.QualityItemInstance;
@@ -253,9 +247,11 @@ namespace DynamicOrdersMod.Systems
                 catch { }
 
                 if (string.IsNullOrEmpty(productID)) continue;
+                if (slotQuantity <= 0) slotQuantity = slot.Quantity;
 
                 if (productID == expectedProductID)
                 {
+                    actualQty += slotQuantity;
                     if (quality > highestQuality) highestQuality = quality;
                 }
                 else

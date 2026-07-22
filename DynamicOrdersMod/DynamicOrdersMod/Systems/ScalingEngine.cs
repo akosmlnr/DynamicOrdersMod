@@ -16,11 +16,13 @@ namespace DynamicOrdersMod.Systems
         /// </summary>
         public static int HashToSeed(string guid, int day)
         {
-            if (string.IsNullOrEmpty(guid)) return day * 2654435761;
+            // Knuth's golden-ratio multiplier; unchecked to wrap as int (deterministic across clients)
+            const int knuth = unchecked((int)2654435761);
+            if (string.IsNullOrEmpty(guid)) return day * knuth;
             int hash = 5381;
             for (int i = 0; i < guid.Length; i++)
                 hash = ((hash << 5) + hash) ^ guid[i];
-            return hash ^ (day * 2654435761);
+            return hash ^ (day * knuth);
         }
 
         /// <summary>

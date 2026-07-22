@@ -14,7 +14,7 @@ namespace DynamicOrdersMod.Core
 
             DynamicEconomyCore.Initialize();
 
-            var harmony = new Harmony("com.akosmlnr.dynamicordersmod.v3");
+            var harmony = new HarmonyLib.Harmony("com.akosmlnr.dynamicordersmod.v3");
             harmony.PatchAll();
             LoggerInstance.Msg("[DynamicOrdersMod v3] Patches applied. All systems ready.");
         }

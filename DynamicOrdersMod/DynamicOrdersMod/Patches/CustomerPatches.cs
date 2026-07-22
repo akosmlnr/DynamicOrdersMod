@@ -318,7 +318,7 @@ namespace DynamicOrdersMod.Patches
                         ConfigManager.Config.Pricing,
                         SaveManager.Data.ActiveEvents,
                         profile.LastRequestedDrugType ?? "",
-                        ConfigManager.Events.ShortagePriceIncrease);
+                        ConfigManager.Config.Events.ShortagePriceIncrease);
                 }
                 catch (Exception ex)
                 {
