@@ -130,3 +130,25 @@ Always:
 3. **Determine scenario** — based on probe results, document which scenario we're in.
 4. **Implement Phase 3 (features)** — execute the scenario-specific implementation plan.
 5. **Test and verify** — confirm dead drops appear in-map, overdose rolls use real potency (if applicable).
+
+## Confirmed Outcome (2026-07-22)
+
+Probe results: **Scenario A — all 4 patches bind and fire.**
+
+```
+[DynamicOrdersMod v3] Harmony patched methods: Il2CppScheduleOne.Economy.Customer.OfferContract,
+Il2CppScheduleOne.Economy.Customer.ProcessHandover, Il2CppScheduleOne.Quests.Contract.InitializeContract,
+Il2CppScheduleOne.Economy.Dealer.ContractedOffered, Il2CppScheduleOne.Money.MoneyManager.ChangeCashBalance,
+Il2CppScheduleOne.Persistence.SaveManager.Save
+```
+
+**Root cause of the original "patches don't bind" issue:** csproj targeted `net472` while MelonLoader 0.7.3 is built for `net6.0`. Type identity mismatch between the two runtimes caused `PatchClassProcessor` to silently fail parameter-type matching. Converting to SDK-style `net6.0` csproj fixed everything.
+
+**Implementation path taken:** Scenario A — full features.
+- Scaling: `OfferContract` PREFIX mutates ContractInfo BEFORE contract creation (fixes the "customer still asks for original quantity" bug)
+- Dead drops: `OfferContract` PREFIX mutates `info.DeliveryLocationGUID` for wholesale-tier customers (30% chance, replaces in-person)
+- Overdose: `ProcessHandover` POSTFIX reads real item list, computes potency from `ProductItemInstance.Amount`
+- Addiction: `RpcLogic___ChangeAddiction_431000436` PREFIX modifies `ref float change` with tolerance modifier
+
+Redundant UnityEvent handlers (`OnCustomerContractAssigned`, `OnCustomerDealCompleted`) stripped to debug-only logging — their work moved to Harmony patches. `OnContractComplete` and `OnContractEnded` kept as fallback signals.
+
