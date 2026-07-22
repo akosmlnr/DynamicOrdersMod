@@ -27,7 +27,15 @@ namespace DynamicOrdersMod.Persistence
                     if (data != null && data.Version != Constants.SaveVersion)
                         MelonLogger.Warning($"[DynamicOrdersMod] Save version mismatch (got {data.Version}, want {Constants.SaveVersion}). Starting fresh.");
                 }
+                // No existing save (or version mismatch): start fresh and persist immediately
+                // so the file shows up on disk alongside config.json.
                 Data = new ModSaveData { Version = Constants.SaveVersion };
+                try { Save(); }
+                catch (System.Exception saveEx)
+                {
+                    MelonLogger.Warning($"[DynamicOrdersMod] Initial save write failed: {saveEx.Message}");
+                }
+                MelonLogger.Msg($"[DynamicOrdersMod] Fresh save created at {Constants.SaveFilePath}");
             }
             catch (System.Exception ex)
             {
@@ -40,6 +48,11 @@ namespace DynamicOrdersMod.Persistence
         {
             try
             {
+                // Ensure the save directory exists (mirrors ConfigManager.Load behavior).
+                // Cheap to call; safe if already present.
+                if (!Directory.Exists(Constants.ModSaveDir))
+                    Directory.CreateDirectory(Constants.ModSaveDir);
+
                 Data.Version = Constants.SaveVersion;
                 var json = JsonConvert.SerializeObject(Data, Formatting.Indented);
                 File.WriteAllText(Constants.TempSaveFilePath, json);
