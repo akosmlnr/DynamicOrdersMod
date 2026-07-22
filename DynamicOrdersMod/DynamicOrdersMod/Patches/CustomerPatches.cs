@@ -1,42 +1,120 @@
+using System;
+using System.Collections.Generic;
 using HarmonyLib;
+using MelonLoader;
+using Il2CppScheduleOne.Economy;
+using Il2CppScheduleOne.ItemFramework;
+using Il2CppScheduleOne.Quests;
+using Il2CppScheduleOne.UI.Handover;
+using DynamicOrdersMod.Core;
 
 namespace DynamicOrdersMod.Patches
 {
     /// <summary>
-    /// Previously held Harmony patches for Customer methods (OfferContract, ContractAccepted,
-    /// ProcessHandover, CurrentContractEnded, RpcLogic___ChangeAddiction_431000436) and
-    /// Contract.Complete.
+    /// PROBE BUILD — testing which Harmony signatures actually bind in this
+    /// MelonLoader/Il2Cpp environment.
     ///
-    /// DIAGNOSTIC FINDING: All customer-related Harmony patches silently failed to bind
-    /// in this MelonLoader/Il2Cpp environment. PatchProcessor.GetPatchInfo reported
-    /// prefixes=0 postfixes=0 for every target method (Customer.OfferContract,
-    /// Customer.ContractAccepted, Customer.ProcessHandover, Customer.CurrentContractEnded,
-    /// Customer.RpcLogic___ChangeAddiction_431000436, Contract.Complete). Only patches on
-    /// non-Customer types (SaveManager.Save) successfully bound.
+    /// Each patch below logs "[probe] <MethodName> FIRED" when it executes.
+    /// That's the ground truth — if the line appears, the patch works.
+    /// If it doesn't appear despite deals happening, the patch didn't bind
+    /// (even if the diagnostic says BOUND).
     ///
-    /// ROOT CAUSE: MelonLoader's Il2Cpp interop does not reliably attach Harmony patches
-    /// to methods on Customer (a NetworkBehaviour with many RPC-generated stubs and
-    /// native-only call sites). Even though AccessTools.Method finds the methods (hence
-    /// "BOUND" in the diagnostic), the PatchClassProcessor silently skips attaching the
-    /// prefix/postfix when parameter signatures don't exactly match the il2cpp-resolved
-    /// signature (especially for ref/out params, List<T> types, and virtual dispatch).
-    ///
-    /// ARCHITECTURE PIVOT: All customer-related hooks moved to UnityEvent subscriptions
-    /// in Core/ModEntry.cs and Core/DynamicEconomyCore.cs. The events used are:
-    ///   - Customer.onCustomerUnlocked (static Action<Customer>) — entry point for per-customer subscription
-    ///   - Customer.onContractAssigned (UnityEvent<Contract>) — scaling + dead drop interception
-    ///   - Customer.onDealCompleted (UnityEvent) — tolerance growth + overdose roll
-    ///   - Contract.onComplete (UnityEvent) — per-contract completion observability
-    ///   - Contract.onQuestEnd (UnityEvent<EQuestState>) — failure/expiration tracking
-    ///
-    /// UnityEvents bypass Harmony entirely and fire from native code regardless of caller
-    /// language, making them strictly more reliable for this game.
-    ///
-    /// This file is kept as an empty placeholder for future use (e.g. if a future MelonLoader
-    /// version fixes the binding issue, or for patches on non-Customer types).
+    /// After this build is tested, we'll know which scenario we're in:
+    ///   A: All 4 fire        -> full features possible
+    ///   B: Contract/Dealer only -> dead drops work, overdose uses proxy
+    ///   C: Only Contract     -> dead drops via InitializeContract, limited overdose
+    ///   D: None fire         -> polish current side-channel approach
     /// </summary>
     public static class CustomerPatches
     {
-        // Intentionally empty. See class-level doc comment.
+        // ============================================================
+        // PROBE 1: Customer.OfferContract PREFIX
+        // Simplest possible Customer method signature.
+        // If this binds, ANY Customer method can be patched.
+        // ============================================================
+        [HarmonyPatch(typeof(Customer), "OfferContract")]
+        [HarmonyPrefix]
+        static void OfferContractProbePrefix(Customer __instance, ContractInfo info)
+        {
+            try
+            {
+                string guid = "?";
+                try { guid = __instance?.NPC?.GUID.ToString() ?? "?"; } catch { }
+                MelonLogger.Msg($"[DOM] [probe] Customer.OfferContract PREFIX FIRED cust={DebugLog.Short(guid)} info_payment={info?.Payment ?? 0:F2}");
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Error($"[DOM] [probe] OfferContract error: {ex.Message}");
+            }
+        }
+
+        // ============================================================
+        // PROBE 2: Customer.ProcessHandover POSTFIX
+        // Complex signature with List<ItemInstance> — the prize.
+        // If this binds, we get real item data for overdose potency.
+        // ============================================================
+        [HarmonyPatch(typeof(Customer), "ProcessHandover")]
+        [HarmonyPostfix]
+        static void ProcessHandoverProbePostfix(
+            Customer __instance,
+            HandoverScreen.EHandoverOutcome outcome,
+            Contract contract,
+            List<ItemInstance> items,
+            bool handoverByPlayer,
+            bool giveBonuses)
+        {
+            try
+            {
+                string guid = "?";
+                try { guid = __instance?.NPC?.GUID.ToString() ?? "?"; } catch { }
+                int itemCount = items?.Count ?? 0;
+                MelonLogger.Msg($"[DOM] [probe] Customer.ProcessHandover POSTFIX FIRED cust={DebugLog.Short(guid)} outcome={outcome} items={itemCount}");
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Error($"[DOM] [probe] ProcessHandover error: {ex.Message}");
+            }
+        }
+
+        // ============================================================
+        // PROBE 3: Contract.InitializeContract POSTFIX
+        // Contract extends Quest (MonoBehaviour, NOT NetworkBehaviour).
+        // Better binding odds than Customer. Access state via __instance.
+        // ============================================================
+        [HarmonyPatch(typeof(Contract), "InitializeContract")]
+        [HarmonyPostfix]
+        static void InitializeContractProbePostfix(Contract __instance)
+        {
+            try
+            {
+                string deliveryLoc = "?";
+                try { deliveryLoc = __instance?.DeliveryLocationGUID ?? "?"; } catch { }
+                MelonLogger.Msg($"[DOM] [probe] Contract.InitializeContract POSTFIX FIRED delivery_loc={deliveryLoc} payment={__instance?.Payment ?? 0:F2}");
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Error($"[DOM] [probe] InitializeContract error: {ex.Message}");
+            }
+        }
+
+        // ============================================================
+        // PROBE 4: Dealer.ContractedOffered PREFIX
+        // Dealer extends NPC. Tests whether Dealer methods bind.
+        // ============================================================
+        [HarmonyPatch(typeof(Dealer), "ContractedOffered")]
+        [HarmonyPrefix]
+        static void ContractedOfferedProbePrefix(Dealer __instance, ContractInfo contractInfo, Customer customer)
+        {
+            try
+            {
+                string custGuid = "?";
+                try { custGuid = customer?.NPC?.GUID.ToString() ?? "?"; } catch { }
+                MelonLogger.Msg($"[DOM] [probe] Dealer.ContractedOffered PREFIX FIRED cust={DebugLog.Short(custGuid)} payment={contractInfo?.Payment ?? 0:F2}");
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Error($"[DOM] [probe] ContractedOffered error: {ex.Message}");
+            }
+        }
     }
 }

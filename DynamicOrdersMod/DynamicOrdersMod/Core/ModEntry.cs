@@ -41,13 +41,14 @@ namespace DynamicOrdersMod.Core
             {
                 var targets = new[]
                 {
+                    // Old targets (for continued verification)
                     ("Customer.OfferContract", typeof(Il2CppScheduleOne.Economy.Customer), "OfferContract"),
-                    ("Customer.ContractAccepted", typeof(Il2CppScheduleOne.Economy.Customer), "ContractAccepted"),
                     ("Customer.ProcessHandover", typeof(Il2CppScheduleOne.Economy.Customer), "ProcessHandover"),
-                    ("Customer.CurrentContractEnded", typeof(Il2CppScheduleOne.Economy.Customer), "CurrentContractEnded"),
-                    ("Customer.RpcLogic___ChangeAddiction_431000436", typeof(Il2CppScheduleOne.Economy.Customer), "RpcLogic___ChangeAddiction_431000436"),
                     ("Contract.Complete", typeof(Il2CppScheduleOne.Quests.Contract), "Complete"),
                     ("SaveManager.Save()", typeof(Il2CppScheduleOne.Persistence.SaveManager), "Save"),
+                    // New probe targets
+                    ("PROBE: Contract.InitializeContract", typeof(Il2CppScheduleOne.Quests.Contract), "InitializeContract"),
+                    ("PROBE: Dealer.ContractedOffered", typeof(Il2CppScheduleOne.Economy.Dealer), "ContractedOffered"),
                 };
                 foreach (var (label, type, methodName) in targets)
                 {
