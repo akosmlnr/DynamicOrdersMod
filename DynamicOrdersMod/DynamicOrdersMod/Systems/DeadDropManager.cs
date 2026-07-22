@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using MelonLoader;
+using DynamicOrdersMod.Core;
 using DynamicOrdersMod.Models;
 using DynamicOrdersMod.Persistence;
 using Il2CppScheduleOne.Quests;
@@ -21,12 +22,18 @@ namespace DynamicOrdersMod.Systems
                 // Scan game's DeadDrop.DeadDrops list, register any not in save data
                 var drops = Il2CppScheduleOne.Economy.DeadDrop.DeadDrops;
                 if (drops == null) return;
+                int newCount = 0;
+                int existingCount = 0;
                 for (int i = 0; i < drops.Count; i++)
                 {
                     var drop = drops[i];
                     if (drop == null) continue;
                     string guid = drop.GUID.ToString();
-                    if (SaveManager.Data.DeadDropStates.ContainsKey(guid)) continue;
+                    if (SaveManager.Data.DeadDropStates.ContainsKey(guid))
+                    {
+                        existingCount++;
+                        continue;
+                    }
 
                     SaveManager.Data.DeadDropStates[guid] = new DeadDropState
                     {
@@ -37,9 +44,12 @@ namespace DynamicOrdersMod.Systems
                         IsDiscovered = false,
                         IsOccupied = false
                     };
+                    newCount++;
+                    DebugLog.Msg("drop=" + DebugLog.Short(guid),
+                        $"registered name=\"{SaveManager.Data.DeadDropStates[guid].DropName}\" region={SaveManager.Data.DeadDropStates[guid].Region}");
                 }
-                if (ConfigManager.Config.General.DebugLogging)
-                    MelonLogger.Msg($"[DynamicOrdersMod] DeadDrop states initialized: {SaveManager.Data.DeadDropStates.Count} drops.");
+                DebugLog.Msg("init",
+                    $"DeadDrop states: total={SaveManager.Data.DeadDropStates.Count} new={newCount} existing={existingCount}");
             }
             catch (Exception ex)
             {
@@ -86,6 +96,12 @@ namespace DynamicOrdersMod.Systems
             {
                 states[best].IsOccupied = true;
                 states[best].Heat = Clamp01(states[best].Heat + 0.05f); // small heat for use
+                DebugLog.Msg("drop=" + DebugLog.Short(best),
+                    $"selected (heat={states[best].Heat:F2})");
+            }
+            else
+            {
+                DebugLog.Msg("drop=?", "SelectDropForAsync: no available drop (none discovered/unoccupied)");
             }
             return best;
         }
@@ -262,6 +278,11 @@ namespace DynamicOrdersMod.Systems
 
             bool foundCorrectProduct = actualQty > 0;
 
+            DebugLog.Msg("drop=" + DebugLog.Short(dropGuid),
+                $"delivery evaluated: qty={actualQty}/{expectedQuantity} " +
+                $"highest_quality={highestQuality} wrong_product={foundWrongProduct} " +
+                $"found_correct={foundCorrectProduct}");
+
             result.ActualQuantity = actualQty;
             result.HighestQuality = highestQuality;
 
@@ -320,15 +341,18 @@ namespace DynamicOrdersMod.Systems
                     if (d.GUID.ToString() == dropGuid)
                     {
                         if (d.Storage != null)
+                        {
                             d.Storage.ClearContents();
+                            DebugLog.Msg("drop=" + DebugLog.Short(dropGuid), "storage cleared");
+                        }
                         return;
                     }
                 }
+                DebugLog.Msg("drop=" + DebugLog.Short(dropGuid), "ClearDropStorage: drop not found in DeadDrops list");
             }
             catch (Exception ex)
             {
-                if (ConfigManager.Config.General.DebugLogging)
-                    MelonLogger.Warning($"[DynamicOrdersMod] ClearDropStorage failed: {ex.Message}");
+                DebugLog.Warn("drop=" + DebugLog.Short(dropGuid), $"ClearDropStorage failed: {ex.Message}");
             }
         }
 
@@ -365,8 +389,7 @@ namespace DynamicOrdersMod.Systems
             }
             catch (Exception ex)
             {
-                if (ConfigManager.Config.General.DebugLogging)
-                    MelonLogger.Warning($"[DynamicOrdersMod] Map label update failed: {ex.Message}");
+                DebugLog.Warn("map", $"label update failed: {ex.Message}");
             }
         }
 
@@ -416,7 +439,10 @@ namespace DynamicOrdersMod.Systems
         {
             var state = GetState(dropGuid);
             if (state == null) return;
+            float pre = state.Heat;
             state.Heat = Clamp01(state.Heat + delta);
+            DebugLog.Msg("drop=" + DebugLog.Short(dropGuid),
+                $"heat {pre:F2} + {delta:F2} -> {state.Heat:F2}");
         }
 
         /// <summary>
@@ -425,7 +451,11 @@ namespace DynamicOrdersMod.Systems
         public static void ReleaseDrop(string dropGuid)
         {
             var state = GetState(dropGuid);
-            if (state != null) state.IsOccupied = false;
+            if (state != null)
+            {
+                state.IsOccupied = false;
+                DebugLog.Msg("drop=" + DebugLog.Short(dropGuid), "released (now unoccupied)");
+            }
         }
 
         /// <summary>
@@ -459,8 +489,14 @@ namespace DynamicOrdersMod.Systems
             try
             {
                 var questManager = Il2CppScheduleOne.Quests.QuestManager.Instance;
-                if (questManager == null) return;
+                if (questManager == null)
+                {
+                    DebugLog.Msg("cust=" + DebugLog.Short(profile.CustomerGuid),
+                        "discovery aborted: QuestManager.Instance null");
+                    return;
+                }
 
+                int spawned = 0;
                 for (int i = 0; i < toDiscover; i++)
                 {
                     string dropGuid = undiscovered[i];
@@ -471,8 +507,11 @@ namespace DynamicOrdersMod.Systems
                         var state = GetState(dropGuid);
                         if (state != null) state.IsDiscovered = true;
                         profile.DiscoveredDeadDrops.Add(dropGuid);
+                        spawned++;
                     }
                 }
+                DebugLog.Msg("cust=" + DebugLog.Short(profile.CustomerGuid),
+                    $"discovery: {spawned}/{toDiscover} quests spawned (of {undiscovered.Count} undiscovered)");
             }
             catch (Exception ex)
             {

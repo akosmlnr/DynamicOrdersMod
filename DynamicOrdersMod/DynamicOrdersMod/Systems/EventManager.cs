@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using MelonLoader;
+using DynamicOrdersMod.Core;
 using DynamicOrdersMod.Models;
 using DynamicOrdersMod.Persistence;
 using DynamicOrdersMod.UI;
@@ -18,6 +19,7 @@ namespace DynamicOrdersMod.Systems
         {
             if (SaveManager.Data == null) return;
             var config = ConfigManager.Config.Events;
+            string tag = "day=" + currentDay;
 
             // Remove expired events
             RemoveExpiredEvents(currentDay);
@@ -26,7 +28,13 @@ namespace DynamicOrdersMod.Systems
             float dailyCrackdown = config.PoliceCrackdownChancePerWeek / 7f;
             float dailyShortage = config.SupplyShortageChancePerWeek / 7f;
 
-            if (RngNext() < dailyCrackdown)
+            float crackdownRoll = RngNext();
+            bool crackdownTriggered = crackdownRoll < dailyCrackdown;
+            DebugLog.Msg(tag,
+                $"event roll: crackdown chance={dailyCrackdown:F4} roll={crackdownRoll:F4} -> " +
+                $"{(crackdownTriggered ? "YES" : "no")}");
+
+            if (crackdownTriggered)
             {
                 int duration = RngRange(config.CrackdownDurationDays.Min, config.CrackdownDurationDays.Max);
                 // Pick a random region — use empty string for "all regions"
@@ -42,12 +50,22 @@ namespace DynamicOrdersMod.Systems
                     DrugType = null
                 });
 
+                DebugLog.Msg(tag,
+                    $"CRACKDOWN started: region={region ?? "(all)"} duration={duration} " +
+                    $"until_day={currentDay + duration}");
+
                 NotificationHelper.Send("Police Crackdown",
                     $"Police activity increased{(region.Length > 0 ? " in " + region : "")}! Dead drop risk is higher.",
                     8f);
             }
 
-            if (RngNext() < dailyShortage)
+            float shortageRoll = RngNext();
+            bool shortageTriggered = shortageRoll < dailyShortage;
+            DebugLog.Msg(tag,
+                $"event roll: shortage chance={dailyShortage:F4} roll={shortageRoll:F4} -> " +
+                $"{(shortageTriggered ? "YES" : "no")}");
+
+            if (shortageTriggered)
             {
                 int duration = RngRange(config.ShortageDurationDays.Min, config.ShortageDurationDays.Max);
                 // EDrugType enum names — empty string means "all drugs"
@@ -62,6 +80,10 @@ namespace DynamicOrdersMod.Systems
                     Region = null,
                     DrugType = drugType
                 });
+
+                DebugLog.Msg(tag,
+                    $"SHORTAGE started: drug={drugType ?? "(all)"} duration={duration} " +
+                    $"until_day={currentDay + duration}");
 
                 NotificationHelper.Send("Supply Shortage",
                     $"Supply shortage{(drugType.Length > 0 ? " of " + drugType : "")}! Prices may increase.",
@@ -170,6 +192,7 @@ namespace DynamicOrdersMod.Systems
         {
             if (profile == null) return false;
             var config = ConfigManager.Config.Overdose;
+            string tag = "cust=" + DebugLog.Short(profile.CustomerGuid);
 
             profile.OverdoseCount++;
             profile.LastOverdoseDay = currentDay;
@@ -184,10 +207,12 @@ namespace DynamicOrdersMod.Systems
             // immediate re-overdose chains that would permanently lock out the customer
             profile.OverdoseGraceUntilDay = profile.HospitalReleaseDay + 2;
 
+            string severity;
             // Relationship consequences on release (applied at release time in CustomerProfileManager)
             // Track for severity-based hits
             if (profile.OverdoseCount == 1)
             {
+                severity = "first (mild)";
                 // First overdose: mild
                 NotificationHelper.Send("Customer Hospitalized",
                     "A customer has been hospitalized after an overdose. They'll be back in a few days.",
@@ -195,6 +220,7 @@ namespace DynamicOrdersMod.Systems
             }
             else if (profile.OverdoseCount == 2)
             {
+                severity = "second (refusal " + config.SecondOverdoseRefusalDays + "d)";
                 // Second overdose: customer refuses to buy for a while
                 profile.LastOverdoseRefusalDay = currentDay + config.SecondOverdoseRefusalDays;
                 NotificationHelper.Send("Customer Hospitalized",
@@ -203,12 +229,22 @@ namespace DynamicOrdersMod.Systems
             }
             else if (config.ThirdOverdosePermanentRefusal)
             {
+                severity = "third+ (PERMANENT refusal)";
                 // Third+ overdose: permanent refusal
                 profile.LastOverdoseRefusalDay = int.MaxValue;
                 NotificationHelper.Send("Customer Lost",
                     "A customer has been hospitalized for a third time and won't be returning.",
                     15f);
             }
+            else
+            {
+                severity = "repeat (Nth)";
+            }
+
+            DebugLog.Msg(tag,
+                $"OVERDOSE resolved: count={profile.OverdoseCount} severity={severity} " +
+                $"hospital_days={hospDays} release_day={profile.HospitalReleaseDay} " +
+                $"grace_until={profile.OverdoseGraceUntilDay}");
 
             return true;
         }
@@ -218,7 +254,11 @@ namespace DynamicOrdersMod.Systems
         private static void RemoveExpiredEvents(int currentDay)
         {
             if (SaveManager.Data?.ActiveEvents == null) return;
+            int beforeCount = SaveManager.Data.ActiveEvents.Count;
             SaveManager.Data.ActiveEvents.RemoveAll(e => currentDay > e.EndDay);
+            int removed = beforeCount - SaveManager.Data.ActiveEvents.Count;
+            if (removed > 0)
+                DebugLog.Msg("day=" + currentDay, $"expired {removed} event(s) ({beforeCount} -> {SaveManager.Data.ActiveEvents.Count})");
         }
 
         private static float RngNext()

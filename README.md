@@ -13,6 +13,8 @@ A MelonLoader mod for **Schedule I** that overhauls the customer economy with dy
 - **Random Events** — Police crackdowns (reduced orders, increased dead drop risk) and supply shortages (reduced orders, increased prices) roll weekly per region.
 - **Overdose System** — Small chance per delivery, driven by delivered product potency (highest effect addictiveness from mix composition) and customer's cumulative addiction. Higher-than-expected quality increases risk (customer's body can't handle the jump); lower quality is the base value. Quantity consumed scales risk. Hospitalized customers are unavailable for 5-10 days with a 2-day post-release grace period to prevent immediate re-overdose. Repeated overdoses cause escalating relationship damage and eventual permanent refusal.
 - **Config Hot-Reload** — Config is re-read every sleep cycle. Edit `config.json` in `%APPDATA%/DynamicOrdersMod/v3/` and sleep in-game to apply.
+- **Auto-Save Sync** — The mod's `saveData.json` is flushed every time the game writes its own save (auto-saves, manual saves, sleep), not just at sleep. The two never drift.
+- **Debug Logging** — Set `"DebugLogging": true` in `config.json` to get a `[DOM] [tag]` log line for every mod event: scaling breakdowns, delivery outcomes, overdose rolls (with chance + roll + components), dead drop contract creation and resolution, tolerance changes, event rolls, hospital releases, wholesale revenue, save flushes, and every skip reason (why scaling didn't fire for a given customer). Zero overhead when disabled.
 
 ## Requirements
 

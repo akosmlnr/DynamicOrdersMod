@@ -26,23 +26,44 @@ namespace DynamicOrdersMod.Patches
             ref float appeal,
             ref int orderableQuantity)
         {
+            string guid = null;
+            try { guid = __instance?.NPC?.GUID.ToString(); }
+            catch { }
+            string tag = "cust=" + DebugLog.Short(guid);
+
             try
             {
-                if (!DynamicEconomyCore.Instance?.ScalingEnabled ?? true) return;
-                if (__instance == null || orderableQuantity <= 1) return;
+                if (!DynamicEconomyCore.Instance?.ScalingEnabled ?? true)
+                {
+                    DebugLog.Msg(tag, "skipped: scaling disabled");
+                    return;
+                }
+                if (__instance == null) return;
+                if (orderableQuantity <= 1)
+                {
+                    DebugLog.Msg(tag, $"skipped: orderableQuantity<=1 (qty={orderableQuantity})");
+                    return;
+                }
 
-                // Host-only: scaling modifies game state, must be authoritative
-                if (!DynamicEconomyCore.IsHost()) return;
+                if (!DynamicEconomyCore.IsHost())
+                {
+                    DebugLog.Msg(tag, "skipped: not host");
+                    return;
+                }
 
-                var profile = CustomerProfileManager.GetOrCreateProfile(
-                    __instance.NPC?.GUID.ToString());
-                if (profile == null) return;
+                var profile = CustomerProfileManager.GetOrCreateProfile(guid);
+                if (profile == null)
+                {
+                    DebugLog.Msg(tag, "skipped: profile null");
+                    return;
+                }
 
                 // Cache drug type and base quantity for EvaluateDelivery postfix
                 // (which uses them for proper tolerance growth and overdose quantity scaling)
+                string drugType = "";
                 if (__result != null)
                 {
-                    try { profile.LastRequestedDrugType = __result.DrugType.ToString(); }
+                    try { drugType = __result.DrugType.ToString(); profile.LastRequestedDrugType = drugType; }
                     catch { }
                 }
                 int baseQuantity = orderableQuantity;
@@ -53,7 +74,11 @@ namespace DynamicOrdersMod.Patches
                 try { currentDay = TimeManager.Instance.ElapsedDays; }
                 catch { }
                 if (currentDay > 0 && !CustomerProfileManager.IsCustomerAvailable(profile, currentDay))
+                {
+                    string reason = profile.IsHospitalized ? "hospitalized" : "in refusal window";
+                    DebugLog.Msg(tag, $"skipped: {reason} (release_day={profile.HospitalReleaseDay})");
                     return;
+                }
 
                 float addiction = __instance.CurrentAddiction;
                 float normalizedRel = 0f;
@@ -68,25 +93,36 @@ namespace DynamicOrdersMod.Patches
                     ConfigManager.Config.Scaling, seed);
 
                 // Apply event order reduction (crackdown/shortage) using cached drug type
-                string drugType = profile.LastRequestedDrugType ?? "";
                 string region = "";
                 try { region = __instance.NPC?.Region.ToString() ?? ""; } catch { }
-                float reduction = EventManager.GetOrderReduction(drugType, region);
+                float reduction = EventManager.GetOrderReduction(drugType ?? "", region);
+                int preEventScaled = scaled;
                 scaled = Math.Max(1, (int)(scaled * reduction));
 
                 // Wholesale multiplier: bulk orders from wholesale-eligible customers
+                bool wholesaleApplied = false;
                 if (CustomerProfileManager.MeetsWholesaleRequirements(profile) &&
                     normalizedRel >= ConfigManager.Config.Wholesale.MinRelationship)
                 {
                     scaled = (int)(scaled * ConfigManager.Config.Wholesale.BulkOrderMultiplier);
+                    wholesaleApplied = true;
                     if (!profile.IsWholesale)
                     {
                         profile.IsWholesale = true;
                         profile.WholesaleWeeksActive = 0;
+                        DebugLog.Msg(tag, "WHOLESALE first-time activation");
                         try { SaveManager.Save(); }
                         catch { }
                     }
                 }
+
+                // Full breakdown for debugging scaling math
+                DebugLog.Msg(tag,
+                    $"order product={drugType} base_qty={orderableQuantity} " +
+                    $"addiction={addiction:F2} rel={normalizedRel:F2} tol={profile.Tolerance:F2} " +
+                    $"seed={seed} -> pre_event={preEventScaled} " +
+                    $"event_reduction={reduction:F2} wholesale={(wholesaleApplied ? "YES" : "NO")} " +
+                    $"-> scaled={scaled}");
 
                 if (scaled != orderableQuantity) orderableQuantity = scaled;
             }
@@ -100,17 +136,31 @@ namespace DynamicOrdersMod.Patches
         [HarmonyPostfix]
         static void ChangeAddictionPostfix(Customer __instance, ref float change)
         {
+            string guid = null;
+            try { guid = __instance?.NPC?.GUID.ToString(); }
+            catch { }
+            string tag = "cust=" + DebugLog.Short(guid);
+
             try
             {
                 if (!DynamicEconomyCore.Instance?.ScalingEnabled ?? true) return;
-                if (__instance == null || change <= 0f) return;
+                if (__instance == null || change <= 0f)
+                {
+                    DebugLog.Msg(tag, $"ChangeAddiction skipped: change<=0 (change={change})");
+                    return;
+                }
 
-                var profile = CustomerProfileManager.GetOrCreateProfile(
-                    __instance.NPC?.GUID.ToString());
+                var profile = CustomerProfileManager.GetOrCreateProfile(guid);
                 if (profile == null) return;
 
+                float original = change;
                 float modified = CustomerProfileManager.ModifyAddictionDelta(profile, change);
                 if (modified != change) change = modified;
+
+                float modifier = 1f - profile.Tolerance * 0.5f;
+                DebugLog.Msg(tag,
+                    $"ChangeAddiction original={original:F4} tolerance_modifier={modifier:F2} " +
+                    $"tolerance={profile.Tolerance:F2} -> modified={modified:F4}");
             }
             catch (Exception ex)
             {
@@ -130,23 +180,35 @@ namespace DynamicOrdersMod.Patches
             ref float qualityDifference,
             ref float __result)
         {
+            string guid = null;
+            try { guid = __instance?.NPC?.GUID.ToString(); }
+            catch { }
+            string tag = "cust=" + DebugLog.Short(guid);
+
             try
             {
                 if (!DynamicEconomyCore.Instance?.ScalingEnabled ?? true) return;
                 if (__instance == null) return;
 
-                string guid = __instance.NPC?.GUID.ToString();
                 var profile = CustomerProfileManager.GetOrCreateProfile(guid);
                 if (profile == null) return;
 
                 int currentDay = 0;
                 try { currentDay = TimeManager.Instance.ElapsedDays; }
                 catch { }
-                if (currentDay <= 0) return;
+                if (currentDay <= 0)
+                {
+                    DebugLog.Msg(tag, "delivery skipped: currentDay<=0");
+                    return;
+                }
 
                 // EDGE CASE: don't process delivery for hospitalized customers
                 // (shouldn't normally happen — game prevents interaction — but guard anyway)
-                if (profile.IsHospitalized) return;
+                if (profile.IsHospitalized)
+                {
+                    DebugLog.Msg(tag, "delivery skipped: hospitalized");
+                    return;
+                }
 
                 // Cache current addiction for tolerance decay formula (Step 6)
                 profile.LastKnownAddiction = __instance.CurrentAddiction;
@@ -163,9 +225,12 @@ namespace DynamicOrdersMod.Patches
                 if (toleranceConfig.QualityExpectationShift && profile.Tolerance > 0f && qualityDifference < 0f)
                 {
                     float penalty = toleranceConfig.SatisfactionPenaltyScale * profile.Tolerance;
+                    float preShift = satisfaction;
                     satisfaction *= (1f - penalty);
                     if (satisfaction < 0f) satisfaction = 0f;
                     __result = satisfaction;
+                    DebugLog.Msg(tag,
+                        $"satisfaction shifted by tolerance: {preShift:F2} -> {satisfaction:F2} (penalty={penalty:F2})");
                 }
 
                 // Record the purchase with real deal data
@@ -173,6 +238,12 @@ namespace DynamicOrdersMod.Patches
                 int orderableQuantity = 1;
                 try { payment = contract?.Payment ?? 0f; } catch { }
                 try { orderableQuantity = contract?.ProductList?.GetTotalQuantity() ?? 1; } catch { }
+
+                DebugLog.Msg(tag,
+                    $"delivery matched={matchedProductCount}/{orderableQuantity} payment=${payment:F2} " +
+                    $"satisfaction={satisfaction:F2} qualityDiff={qualityDifference:F2} " +
+                    $"highestAddiction={highestAddiction:F2} drug={drugType}");
+
                 profile.RecordPurchase(currentDay, drugType, matchedProductCount, payment);
                 profile.RecordSuccess();
 
@@ -185,7 +256,13 @@ namespace DynamicOrdersMod.Patches
                 bool shouldRollOverdose = matchedProductCount > 0;
                 // Skip if in grace period after hospital release
                 if (shouldRollOverdose && profile.OverdoseGraceUntilDay > 0 && currentDay < profile.OverdoseGraceUntilDay)
+                {
+                    DebugLog.Msg(tag,
+                        $"overdose roll skipped: grace period (until day {profile.OverdoseGraceUntilDay})");
                     shouldRollOverdose = false;
+                }
+                if (matchedProductCount == 0)
+                    DebugLog.Msg(tag, "overdose roll skipped: matchedProductCount=0");
 
                 if (shouldRollOverdose)
                 {
@@ -197,8 +274,17 @@ namespace DynamicOrdersMod.Patches
                     float overdoseChance = EventManager.CalculateOverdoseChance(
                         profile, qualityDifference, highestAddiction,
                         __instance.CurrentAddiction, quantityFactor);
-                    if (overdoseChance > 0f && (float)UnityEngine.Random.value < overdoseChance)
+                    float roll = (float)UnityEngine.Random.value;
+                    if (overdoseChance <= 0f)
                     {
+                        DebugLog.Msg(tag, $"overdose roll: chance=0 (no potency/addiction)");
+                    }
+                    else if (roll < overdoseChance)
+                    {
+                        DebugLog.Msg(tag,
+                            $"OVERDOSE ROLL: chance={overdoseChance:F4} roll={roll:F4} -> YES " +
+                            $"(qtyFactor={quantityFactor:F2} potency={highestAddiction:F2} " +
+                            $"addiction={__instance.CurrentAddiction:F2})");
                         bool overdosed = EventManager.ResolveOverdose(profile, currentDay);
                         if (overdosed)
                         {
@@ -218,6 +304,11 @@ namespace DynamicOrdersMod.Patches
                             catch { }
                         }
                     }
+                    else
+                    {
+                        DebugLog.Msg(tag,
+                            $"overdose roll: chance={overdoseChance:F4} roll={roll:F4} -> NO");
+                    }
                 }
 
                 // Dead drop completion is now handled by DynamicEconomyCore.ResolveDeadDropDeals
@@ -233,17 +324,30 @@ namespace DynamicOrdersMod.Patches
         [HarmonyPostfix]
         static void TryGenerateContractPostfix(Customer __instance, Dealer dealer, ref ContractInfo __result)
         {
+            string guid = null;
+            try { guid = __instance?.NPC?.GUID.ToString(); }
+            catch { }
+            string tag = "cust=" + DebugLog.Short(guid);
+
             try
             {
                 if (!DynamicEconomyCore.Instance?.ScalingEnabled ?? true) return;
-                if (!ConfigManager.Config.DeadDrop.Enabled) return;
+                if (!ConfigManager.Config.DeadDrop.Enabled)
+                {
+                    DebugLog.Msg(tag, "contract skipped: DeadDrop disabled in config");
+                    return;
+                }
                 if (__instance == null || __result == null) return;
-                if (!DynamicEconomyCore.IsHost()) return;
+                if (!DynamicEconomyCore.IsHost())
+                {
+                    DebugLog.Msg(tag, "contract skipped: not host");
+                    return;
+                }
 
                 var npc = __instance.NPC;
                 if (npc == null) return;
 
-                string guid = npc.GUID.ToString();
+                guid = npc.GUID.ToString();
                 var profile = CustomerProfileManager.GetOrCreateProfile(guid);
                 if (profile == null) return;
 
@@ -251,18 +355,35 @@ namespace DynamicOrdersMod.Patches
                 for (int i = 0; i < SaveManager.Data.ActiveDeadDropDeals.Count; i++)
                 {
                     var existing = SaveManager.Data.ActiveDeadDropDeals[i];
-                    if (existing.CustomerGuid == guid && !existing.IsResolved) return;
+                    if (existing.CustomerGuid == guid && !existing.IsResolved)
+                    {
+                        DebugLog.Msg(tag, "contract skipped: existing unresolved deal");
+                        return;
+                    }
                 }
 
                 // Check relationship
                 float normalizedRel = 0f;
                 try { normalizedRel = npc.RelationData?.NormalizedRelationDelta ?? 0f; }
                 catch { }
-                if (normalizedRel < ConfigManager.Config.DeadDrop.MinRelationship) return;
+                if (normalizedRel < ConfigManager.Config.DeadDrop.MinRelationship)
+                {
+                    DebugLog.Msg(tag,
+                        $"contract skipped: rel {normalizedRel:F2} < min {ConfigManager.Config.DeadDrop.MinRelationship:F2}");
+                    return;
+                }
 
                 // Check tolerance and deal count thresholds
-                if (profile.Tolerance < 0.3f) return;
-                if (profile.LifetimeDeals < 5) return;
+                if (profile.Tolerance < 0.3f)
+                {
+                    DebugLog.Msg(tag, $"contract skipped: tolerance {profile.Tolerance:F2} < 0.3");
+                    return;
+                }
+                if (profile.LifetimeDeals < 5)
+                {
+                    DebugLog.Msg(tag, $"contract skipped: lifetime deals {profile.LifetimeDeals} < 5");
+                    return;
+                }
 
                 // Check cooldown
                 int currentDay = 0;
@@ -270,11 +391,24 @@ namespace DynamicOrdersMod.Patches
                 catch { }
                 if (profile.LastDeadDropFailDay > 0 &&
                     currentDay - profile.LastDeadDropFailDay < ConfigManager.Config.DeadDrop.TheftCooldownDays)
+                {
+                    DebugLog.Msg(tag,
+                        $"contract skipped: cooldown ({currentDay - profile.LastDeadDropFailDay}d since fail, " +
+                        $"need {ConfigManager.Config.DeadDrop.TheftCooldownDays}d)");
                     return;
+                }
+
+                DebugLog.Msg(tag,
+                    $"contract ELIGIBLE: rel={normalizedRel:F2} tol={profile.Tolerance:F2} " +
+                    $"lifetime={profile.LifetimeDeals} deals");
 
                 // Customer is eligible — select a dead drop
                 string selectedDrop = DeadDropManager.SelectDropForAsync();
-                if (selectedDrop == null) return;
+                if (selectedDrop == null)
+                {
+                    DebugLog.Msg(tag, "contract aborted: no available drop");
+                    return;
+                }
 
                 var ddConfig = ConfigManager.Config.DeadDrop;
 
@@ -322,8 +456,7 @@ namespace DynamicOrdersMod.Patches
                 }
                 catch (Exception ex)
                 {
-                    if (ConfigManager.Config.General.DebugLogging)
-                        MelonLogger.Warning($"[DynamicOrdersMod] Pricing engine error: {ex.Message}");
+                    DebugLog.Warn(tag, $"pricing engine error: {ex.Message}");
                 }
 
                 // Round payment to 2 decimals to avoid float precision drift
@@ -332,6 +465,12 @@ namespace DynamicOrdersMod.Patches
                 // Update the contract so the player sees the right delivery location and payment
                 __result.DeliveryLocationGUID = selectedDrop;
                 __result.Payment = basePayment;
+
+                DebugLog.Msg(tag,
+                    $"contract CREATED deal: prepaid={(isPrepaid ? "YES" : "NO")} " +
+                    $"payment=${basePayment:F2} product={expectedProductID} " +
+                    $"qty={expectedQuantity} quality={expectedQuality} " +
+                    $"drop={DebugLog.Short(selectedDrop)} day={currentDay}");
 
                 // Create the DeadDropDeal record for tracking and resolution
                 string dealId = $"dd_{guid}_{currentDay}_{UnityEngine.Random.Range(1000, 9999)}";

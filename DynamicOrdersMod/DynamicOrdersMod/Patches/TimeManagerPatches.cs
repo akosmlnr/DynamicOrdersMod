@@ -23,6 +23,8 @@ namespace DynamicOrdersMod.Patches
                 if (DynamicEconomyCore.Instance == null) return;
                 int currentDay = 0;
                 try { currentDay = __instance.ElapsedDays; } catch { }
+                DynamicOrdersMod.Core.DebugLog.Msg("sleep",
+                    $"StartSleep fired, day={currentDay}, OnDayEnd will run");
                 DynamicEconomyCore.Instance.OnDayEnd(currentDay);
             }
             catch (Exception ex)

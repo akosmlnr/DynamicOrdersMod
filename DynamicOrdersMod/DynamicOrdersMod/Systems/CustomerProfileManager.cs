@@ -1,5 +1,6 @@
 using System;
 using MelonLoader;
+using DynamicOrdersMod.Core;
 using DynamicOrdersMod.Models;
 using DynamicOrdersMod.Persistence;
 
@@ -27,6 +28,7 @@ namespace DynamicOrdersMod.Systems
                 LastOverdoseRefusalDay = -1, LastDeadDropFailDay = -1
             };
             SaveManager.Data.CustomerProfiles[customerGuid] = profile;
+            DebugLog.Msg("cust=" + DebugLog.Short(customerGuid), "profile CREATED (new customer)");
             return profile;
         }
 
@@ -34,11 +36,21 @@ namespace DynamicOrdersMod.Systems
             CustomerProfile profile, int quantity, int baseQuantity, float dependenceMultiplier)
         {
             if (profile == null || baseQuantity <= 0) return;
+            string tag = "cust=" + DebugLog.Short(profile.CustomerGuid);
             float configGain = ConfigManager.Config.Tolerance.GainPerDelivery;
             float ratio = (float)quantity / baseQuantity;
-            if (ratio <= 1f) return;
+            if (ratio <= 1f)
+            {
+                DebugLog.Msg(tag,
+                    $"tolerance no-growth: ratio={ratio:F2} (qty={quantity}/base={baseQuantity})");
+                return;
+            }
             float gain = (ratio - 1f) * configGain * dependenceMultiplier;
+            float preTol = profile.Tolerance;
             profile.Tolerance = Clamp(profile.Tolerance + gain);
+            DebugLog.Msg(tag,
+                $"tolerance +{gain:F4} ({preTol:F3} -> {profile.Tolerance:F3}) " +
+                $"[gain={configGain} * ratio_excess={(ratio - 1f):F2} * dep={dependenceMultiplier:F2}]");
         }
 
         public static float ModifyAddictionDelta(CustomerProfile profile, float originalDelta)
@@ -52,6 +64,11 @@ namespace DynamicOrdersMod.Systems
         {
             if (SaveManager.Data == null) return;
             float decayBase = ConfigManager.Config.Tolerance.DailyDecayBase;
+            string tag = "day=" + currentDay;
+
+            int decayedCount = 0;
+            float addictionFactorSum = 0f;
+            int releasedCount = 0;
 
             foreach (var profile in SaveManager.Data.CustomerProfiles.Values)
             {
@@ -62,18 +79,35 @@ namespace DynamicOrdersMod.Systems
                 float addictionFactor = 1f;
                 if (profile.LastKnownAddiction > 0f)
                     addictionFactor = Math.Max(0.1f, 1f - profile.LastKnownAddiction);
-                float decay = decayBase * addictionFactor;
+                addictionFactorSum += addictionFactor;
 
-                if (decay > 0f && profile.Tolerance > 0f)
-                    profile.Tolerance = Clamp(profile.Tolerance - decay);
+                if (decayBase > 0f && profile.Tolerance > 0f)
+                {
+                    float decay = decayBase * addictionFactor;
+                    if (decay > 0f)
+                    {
+                        profile.Tolerance = Clamp(profile.Tolerance - decay);
+                        decayedCount++;
+                    }
+                }
+
+                bool wasHospitalized = profile.IsHospitalized;
                 UpdateHospitalization(profile, currentDay);
+                if (wasHospitalized && !profile.IsHospitalized) releasedCount++;
             }
+
+            int totalProfiles = SaveManager.Data.CustomerProfiles.Values.Count;
+            float avgFactor = totalProfiles > 0 ? addictionFactorSum / totalProfiles : 0f;
+            DebugLog.Msg(tag,
+                $"decay: processed={totalProfiles} decayed={decayedCount} " +
+                $"addiction_factor_avg={avgFactor:F2} released_from_hospital={releasedCount}");
         }
 
         private static void UpdateHospitalization(CustomerProfile profile, int currentDay)
         {
             if (!profile.IsHospitalized) return;
             if (currentDay < profile.HospitalReleaseDay) return;
+            string tag = "cust=" + DebugLog.Short(profile.CustomerGuid);
 
             profile.IsHospitalized = false;
 
@@ -119,8 +153,9 @@ namespace DynamicOrdersMod.Systems
             if (!applied)
                 profile.PendingRelationshipHit = hit;
 
-            if (ConfigManager.Config.General.DebugLogging)
-                MelonLogger.Msg($"[DynamicOrdersMod] {profile.CustomerGuid} released from hospital. Hit={hit} applied={applied}");
+            DebugLog.Msg(tag,
+                $"HOSPITAL RELEASED: hit={hit:F3} applied={(applied ? "YES" : "NO (deferred)")} " +
+                $"overdose_count={profile.OverdoseCount}");
         }
 
         /// <summary>
@@ -131,10 +166,13 @@ namespace DynamicOrdersMod.Systems
         {
             if (profile == null || npc == null) return;
             if (profile.PendingRelationshipHit <= 0f) return;
+            string tag = "cust=" + DebugLog.Short(profile.CustomerGuid);
             try
             {
-                npc.RelationData.ChangeRelationship(-profile.PendingRelationshipHit);
+                float hit = profile.PendingRelationshipHit;
+                npc.RelationData.ChangeRelationship(-hit);
                 profile.PendingRelationshipHit = 0f;
+                DebugLog.Msg(tag, $"pending relationship hit APPLIED: -{hit:F3}");
             }
             catch (Exception ex)
             {

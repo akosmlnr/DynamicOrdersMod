@@ -31,6 +31,7 @@ namespace DynamicOrdersMod.Core
             if (!IsHost()) return;
             try
             {
+                DebugLog.Msg("day=" + currentDay, "OnDayEnd fired");
                 ConfigManager.Reload();
                 DeadDropManager.InitializeDeadDropStates();
                 CustomerProfileManager.ApplyDailyDecay(currentDay);
@@ -48,6 +49,22 @@ namespace DynamicOrdersMod.Core
         }
 
         /// <summary>
+        /// Called from SaveManagerPatches when the game writes its own save file.
+        /// Mirrors the same write to the mod's saveData.json so the two never drift.
+        /// Host-only: clients receive their state from the host, so they skip the write.
+        /// </summary>
+        public void OnGameSave()
+        {
+            if (!IsInitialized) return;
+            if (!IsHost()) return;
+            try { SaveManager.Save(); }
+            catch (System.Exception ex)
+            {
+                MelonLogger.Error($"[DynamicOrdersMod] OnGameSave error: {ex.Message}");
+            }
+        }
+
+        /// <summary>
         /// Resolves all dead drop deals whose window has passed.
         /// Reads actual storage contents, computes proportional payment with quality bargain,
         /// applies relationship changes, and handles all edge cases.
@@ -58,6 +75,7 @@ namespace DynamicOrdersMod.Core
             var deals = SaveManager.Data?.ActiveDeadDropDeals;
             if (deals == null || deals.Count == 0) return;
 
+            DebugLog.Msg("day=" + currentDay, $"resolving dead drop deals: total={deals.Count}");
             var ddConfig = ConfigManager.Config.DeadDrop;
             var toRemove = new List<DeadDropDeal>();
 
@@ -65,7 +83,12 @@ namespace DynamicOrdersMod.Core
             {
                 var deal = deals[i];
                 if (deal == null || deal.IsResolved) continue;
-                if (currentDay < deal.WindowDay) continue; // not yet time to resolve
+                if (currentDay < deal.WindowDay)
+                {
+                    DebugLog.Msg("deal=" + deal.DealId,
+                        $"skipped: window not yet (window_day={deal.WindowDay}, today={currentDay})");
+                    continue;
+                }
 
                 try
                 {
@@ -291,8 +314,10 @@ namespace DynamicOrdersMod.Core
                 profile.ActiveDeadDropPendingCompletion = false;
             }
 
-            if (ConfigManager.Config.General.DebugLogging)
-                MelonLogger.Msg($"[DynamicOrdersMod] Deal {deal.DealId} resolved: {resultOutcome}, ${actualPayment:F2}");
+            DebugLog.Msg("deal=" + deal.DealId,
+                $"resolved outcome={resultOutcome} payment=${actualPayment:F2} " +
+                $"rel_delta={relationshipChange:F3} prepaid={deal.IsPrepaid} " +
+                $"customer={DebugLog.Short(deal.CustomerGuid)}");
         }
 
         public void ProcessWeeklyWholesale(int currentDay)
@@ -307,16 +332,27 @@ namespace DynamicOrdersMod.Core
             try
             {
                 float totalRevenue = 0f;
+                int processed = 0;
                 foreach (var profile in SaveManager.Data.CustomerProfiles.Values)
                 {
                     if (!profile.IsWholesale) continue;
-                    if (!CustomerProfileManager.IsCustomerAvailable(profile, currentDay)) continue;
+                    if (!CustomerProfileManager.IsCustomerAvailable(profile, currentDay))
+                    {
+                        DebugLog.Msg("week=" + (currentDay / 7),
+                            $"wholesale skipped {DebugLog.Short(profile.CustomerGuid)}: not available");
+                        continue;
+                    }
 
                     profile.WholesaleWeeksActive++;
 
                     float baseRevenue = 100f * profile.Tolerance;
                     float cut = baseRevenue * config.WeeklyRevenueCut;
                     totalRevenue += cut;
+                    processed++;
+
+                    DebugLog.Msg("cust=" + DebugLog.Short(profile.CustomerGuid),
+                        $"wholesale week={profile.WholesaleWeeksActive} " +
+                        $"base=${baseRevenue:F2} cut=${cut:F2} (tolerance={profile.Tolerance:F2})");
 
                     SaveManager.Data.WholesaleRecords.Add(new WholesaleRecord
                     {
@@ -341,8 +377,14 @@ namespace DynamicOrdersMod.Core
 
                     SaveManager.Data.Statistics.TotalWholesaleRevenue += totalRevenue;
 
-                    if (ConfigManager.Config.General.DebugLogging)
-                        MelonLogger.Msg($"[DynamicOrdersMod] Weekly wholesale revenue: ${totalRevenue:F2}");
+                    DebugLog.Msg("week=" + (currentDay / 7),
+                        $"wholesale processed={processed} total_revenue=${totalRevenue:F2} " +
+                        $"cumulative=${SaveManager.Data.Statistics.TotalWholesaleRevenue:F2}");
+                }
+                else
+                {
+                    DebugLog.Msg("week=" + (currentDay / 7),
+                        $"wholesale processed=0 total_revenue=$0.00 (no wholesale customers)");
                 }
 
                 try

@@ -29,7 +29,12 @@ namespace DynamicOrdersMod.Patches
                 }
 
                 if (hasWholesale)
+                {
                     SaveManager.Data.Statistics.TotalWholesaleRevenue += change;
+                    DebugLog.Msg("money",
+                        $"cash +${change:F2} attributed to wholesale " +
+                        $"(cumulative=${SaveManager.Data.Statistics.TotalWholesaleRevenue:F2})");
+                }
             }
             catch (Exception ex)
             {
