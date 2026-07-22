@@ -60,9 +60,12 @@ namespace DynamicOrdersMod.Patches
                 try { normalizedRel = __instance.NPC?.RelationData?.NormalizedRelationDelta ?? 0f; }
                 catch { }
 
+                // Deterministic seed: same customer + same day = same scaled quantity on all clients
+                int seed = ScalingEngine.HashToSeed(__instance.NPC?.GUID.ToString() ?? "", currentDay);
+
                 int scaled = ScalingEngine.CalculateScaledQuantity(
                     orderableQuantity, addiction, normalizedRel, profile.Tolerance,
-                    ConfigManager.Config.Scaling);
+                    ConfigManager.Config.Scaling, seed);
 
                 // Apply event order reduction (crackdown/shortage) using cached drug type
                 string drugType = profile.LastRequestedDrugType ?? "";
@@ -140,6 +143,10 @@ namespace DynamicOrdersMod.Patches
                 try { currentDay = TimeManager.Instance.ElapsedDays; }
                 catch { }
                 if (currentDay <= 0) return;
+
+                // EDGE CASE: don't process delivery for hospitalized customers
+                // (shouldn't normally happen — game prevents interaction — but guard anyway)
+                if (profile.IsHospitalized) return;
 
                 // Cache current addiction for tolerance decay formula (Step 6)
                 profile.LastKnownAddiction = __instance.CurrentAddiction;

@@ -79,6 +79,7 @@
     <Compile Include="Models\ModSaveData.cs" />
     <Compile Include="Models\ActiveEvent.cs" />
     <Compile Include="Models\WholesaleRecord.cs" />
+    <Compile Include="Models\DeadDropDeal.cs" />
     <Compile Include="Persistence\ConfigManager.cs" />
     <Compile Include="Persistence\SaveManager.cs" />
     <Compile Include="Systems\ScalingEngine.cs" />

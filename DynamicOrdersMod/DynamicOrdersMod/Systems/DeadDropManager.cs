@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using MelonLoader;
 using DynamicOrdersMod.Models;
 using DynamicOrdersMod.Persistence;
-using Il2CppScheduleOne.ItemFramework;
 using Il2CppScheduleOne.Quests;
 using Il2CppScheduleOne.Storage;
 
@@ -202,35 +201,48 @@ namespace DynamicOrdersMod.Systems
             catch { }
             if (drop == null) return result;
 
-            // Read storage contents
-            List<ItemInstance> allItems = null;
+            // Read storage contents via ItemSlots (Quantity lives on the slot, not the instance)
+            Il2CppScheduleOne.Storage.WorldStorageEntity storage = null;
             try
             {
-                if (drop.Storage != null)
-                    allItems = drop.Storage.GetAllItems();
+                if (drop.Storage != null) storage = drop.Storage;
             }
             catch { }
-            if (allItems == null || allItems.Count == 0) return result;
+            if (storage == null || storage.ItemSlots == null) return result;
 
-            // Sum quantities of matching product, track highest quality
+            // First use the storage's own GetQuantityOfItem for reliable quantity sum
+            // (this handles stacking correctly across slots)
             int actualQty = 0;
+            try { actualQty = storage.GetQuantityOfItem(expectedProductID); }
+            catch { }
+
+            // Then iterate slots to find the highest quality of the matching product
             int highestQuality = -1;
-            bool foundCorrectProduct = false;
             bool foundWrongProduct = false;
 
-            for (int i = 0; i < allItems.Count; i++)
+            var slots = storage.ItemSlots;
+            for (int i = 0; i < slots.Count; i++)
             {
-                var item = allItems[i];
+                var slot = slots[i];
+                if (slot == null) continue;
+                var item = slot.ItemInstance;
                 if (item == null) continue;
 
-                // Try to get product ID and quality
                 string productID = "";
                 int quality = -1;
-                int quantity = 0;
                 try
                 {
                     var def = item.Definition;
-                    if (def != null) productID = def.ID;
+                    if (def != null)
+                    {
+                        // ID is on BaseItemDefinition (parent of ItemDefinition)
+                        // Use GetSaveString or ID via reflection-safe property access
+                        try { productID = def.ID; } catch { }
+                        if (string.IsNullOrEmpty(productID))
+                        {
+                            try { productID = def.name; } catch { } // fallback to ScriptableObject name
+                        }
+                    }
                 }
                 catch { }
                 try
@@ -239,15 +251,11 @@ namespace DynamicOrdersMod.Systems
                     if (qualityItem != null) quality = (int)qualityItem.Quality;
                 }
                 catch { }
-                try { quantity = item.GetTotalAmount(); }
-                catch { try { quantity = 1; } catch { } }
 
                 if (string.IsNullOrEmpty(productID)) continue;
 
                 if (productID == expectedProductID)
                 {
-                    foundCorrectProduct = true;
-                    actualQty += quantity;
                     if (quality > highestQuality) highestQuality = quality;
                 }
                 else
@@ -255,6 +263,8 @@ namespace DynamicOrdersMod.Systems
                     foundWrongProduct = true;
                 }
             }
+
+            bool foundCorrectProduct = actualQty > 0;
 
             result.ActualQuantity = actualQty;
             result.HighestQuality = highestQuality;
