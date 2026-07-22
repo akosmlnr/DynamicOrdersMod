@@ -98,19 +98,19 @@ namespace DynamicOrdersMod.Patches
 
         [HarmonyPatch(typeof(Customer), "ChangeAddiction")]
         [HarmonyPostfix]
-        static void ChangeAddictionPostfix(Customer __instance, ref float amount)
+        static void ChangeAddictionPostfix(Customer __instance, ref float change)
         {
             try
             {
                 if (!DynamicEconomyCore.Instance?.ScalingEnabled ?? true) return;
-                if (__instance == null || amount <= 0f) return;
+                if (__instance == null || change <= 0f) return;
 
                 var profile = CustomerProfileManager.GetOrCreateProfile(
                     __instance.NPC?.GUID.ToString());
                 if (profile == null) return;
 
-                float modified = CustomerProfileManager.ModifyAddictionDelta(profile, amount);
-                if (modified != amount) amount = modified;
+                float modified = CustomerProfileManager.ModifyAddictionDelta(profile, change);
+                if (modified != change) change = modified;
             }
             catch (Exception ex)
             {

@@ -7,11 +7,11 @@ A MelonLoader mod for **Schedule I** that overhauls the customer economy with dy
 - **Dynamic Order Scaling** — Customer order sizes scale with addiction, relationship, and tolerance. Binge orders can randomly occur.
 - **Tolerance System** — Customers build tolerance over time (grows per delivery, decays daily). High-tolerance customers expect higher quality and are less satisfied with the same product.
 - **Pricing Engine** — Volume discounts at 5/15/50/100 deals, per-customer market fluctuation, and addiction-based price premiums.
-- **Dead Drop Contracts** — High-relationship customers switch from handoffs to dead drops. Supports prepaid and async deals with a price premium. Dead drops carry risk of theft, non-payment, and police interception.
+- **Dead Drop Contracts** — High-relationship customers switch from handoffs to dead drops. Supports prepaid (customer pays upfront, player delivers) and async (payment on delivery, risk of non-payment) deals. Dead drops carry risk of theft, non-payment, and police interception (scaled by heat and active crackdowns). Resolution reads actual storage contents — partial quantity pays proportionally, higher quality earns a bonus, lower quality means the customer bargains down, wrong product is a failure. One active deal per customer; 7-day cooldown on failure.
 - **Discovery Quests** — When a customer first becomes dead-drop eligible, discovery quests spawn for undiscovered locations.
 - **Wholesale Deals** — Customers with 20+ completed deals and high relationship can become wholesale buyers, generating weekly passive income.
 - **Random Events** — Police crackdowns (reduced orders, increased dead drop risk) and supply shortages (reduced orders, increased prices) roll weekly per region.
-- **Overdose System** — Small chance per delivery, influenced by quality mismatch. Hospitalized customers are unavailable. Repeated overdoses cause escalating relationship damage and eventual permanent refusal.
+- **Overdose System** — Small chance per delivery, driven by delivered product potency (highest effect addictiveness from mix composition) and customer's cumulative addiction. Higher-than-expected quality increases risk (customer's body can't handle the jump); lower quality is the base value. Quantity consumed scales risk. Hospitalized customers are unavailable for 5-10 days with a 2-day post-release grace period to prevent immediate re-overdose. Repeated overdoses cause escalating relationship damage and eventual permanent refusal.
 - **Config Hot-Reload** — Config is re-read every sleep cycle. Edit `config.json` in `%APPDATA%/DynamicOrdersMod/v3/` and sleep in-game to apply.
 
 ## Requirements

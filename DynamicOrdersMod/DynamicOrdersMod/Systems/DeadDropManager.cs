@@ -19,7 +19,7 @@ namespace DynamicOrdersMod.Systems
             try
             {
                 // Scan game's DeadDrop.DeadDrops list, register any not in save data
-                var drops = Il2CppScheduleOne.Deaddrop.DeadDrop.DeadDrops;
+                var drops = Il2CppScheduleOne.Economy.DeadDrop.DeadDrops;
                 if (drops == null) return;
                 for (int i = 0; i < drops.Count; i++)
                 {
@@ -184,10 +184,10 @@ namespace DynamicOrdersMod.Systems
             if (string.IsNullOrEmpty(expectedProductID) || expectedQuantity <= 0) return result;
 
             // Find the DeadDrop object by GUID
-            Il2CppScheduleOne.Deaddrop.DeadDrop drop = null;
+            Il2CppScheduleOne.Economy.DeadDrop drop = null;
             try
             {
-                var drops = Il2CppScheduleOne.Deaddrop.DeadDrop.DeadDrops;
+                var drops = Il2CppScheduleOne.Economy.DeadDrop.DeadDrops;
                 if (drops != null)
                 {
                     for (int i = 0; i < drops.Count; i++)
@@ -315,7 +315,7 @@ namespace DynamicOrdersMod.Systems
         {
             try
             {
-                var drops = Il2CppScheduleOne.Deaddrop.DeadDrop.DeadDrops;
+                var drops = Il2CppScheduleOne.Economy.DeadDrop.DeadDrops;
                 if (drops == null) return;
                 for (int i = 0; i < drops.Count; i++)
                 {
@@ -345,7 +345,7 @@ namespace DynamicOrdersMod.Systems
             if (!ConfigManager.Config.DeadDrop.Enabled) return;
             try
             {
-                var drops = Il2CppScheduleOne.Deaddrop.DeadDrop.DeadDrops;
+                var drops = Il2CppScheduleOne.Economy.DeadDrop.DeadDrops;
                 if (drops == null) return;
                 for (int i = 0; i < drops.Count; i++)
                 {
