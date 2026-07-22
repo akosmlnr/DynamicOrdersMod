@@ -1,6 +1,5 @@
 using System;
 using System.Linq;
-using System.Reflection;
 using MelonLoader;
 using HarmonyLib;
 using UnityEngine.Events;
@@ -29,7 +28,7 @@ namespace DynamicOrdersMod.Core
             // the assembly explicitly is more reliable than the parameterless overload.
             try
             {
-                HarmonyInstance.PatchAll(Assembly.GetExecutingAssembly());
+                HarmonyInstance.PatchAll(System.Reflection.Assembly.GetExecutingAssembly());
                 LoggerInstance.Msg("[DynamicOrdersMod v3] Patches applied. All systems ready.");
 
                 // Log which methods actually got patched for diagnostic confirmation

@@ -1,101 +1,80 @@
 <?xml version="1.0" encoding="utf-8"?>
-<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+<Project Sdk="Microsoft.NET.Sdk">
+
   <PropertyGroup>
-    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
-    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
-    <ProjectGuid>{4821DCE2-9C1F-403D-A822-656E43EDE965}</ProjectGuid>
-    <OutputType>Library</OutputType>
-    <AppDesignerFolder>Properties</AppDesignerFolder>
+    <TargetFramework>net6.0</TargetFramework>
     <RootNamespace>DynamicOrdersMod</RootNamespace>
     <AssemblyName>DynamicOrdersMod</AssemblyName>
-    <TargetFrameworkVersion>v4.7.2</TargetFrameworkVersion>
-    <FileAlignment>512</FileAlignment>
-    <Deterministic>true</Deterministic>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <PlatformTarget>x64</PlatformTarget>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <RestoreAdditionalProjectSources>
+      https://nuget.bepinex.dev/v3/index.json
+    </RestoreAdditionalProjectSources>
+    <!-- We carry our own MelonInfo / MelonGame attributes in Properties/AssemblyInfo.cs -->
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
   </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
-    <DebugSymbols>true</DebugSymbols>
-    <DebugType>full</DebugType>
-    <Optimize>false</Optimize>
-    <OutputPath>bin\Debug\</OutputPath>
-    <DefineConstants>DEBUG;TRACE</DefineConstants>
-    <ErrorReport>prompt</ErrorReport>
-    <WarningLevel>4</WarningLevel>
+
+  <!--
+    Schedule I game directory. Override locally via:
+      dotnet build -p:ScheduleOneGameDir="D:\SteamLibrary\steamapps\common\Schedule I"
+    or edit this default to match your install.
+  -->
+  <PropertyGroup Condition="'$(ScheduleOneGameDir)' == ''">
+    <ScheduleOneGameDir>D:\SteamLibrary\steamapps\common\Schedule I</ScheduleOneGameDir>
   </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
-    <DebugType>pdbonly</DebugType>
-    <Optimize>true</Optimize>
-    <OutputPath>bin\Release\</OutputPath>
-    <DefineConstants>TRACE</DefineConstants>
-    <ErrorReport>prompt</ErrorReport>
-    <WarningLevel>4</WarningLevel>
-  </PropertyGroup>
+
   <ItemGroup>
-    <Reference Include="0Harmony, Version=2.10.2.0, Culture=neutral, processorArchitecture=MSIL">
-      <SpecificVersion>False</SpecificVersion>
-      <HintPath>D:\SteamLibrary\steamapps\common\Schedule I\MelonLoader\net6\0Harmony.dll</HintPath>
+    <!-- MelonLoader core (net6 for IL2CPP builds) -->
+    <Reference Include="MelonLoader">
+      <HintPath>$(ScheduleOneGameDir)\MelonLoader\net6\MelonLoader.dll</HintPath>
+      <Private>false</Private>
     </Reference>
-    <Reference Include="Assembly-CSharp">
-      <HintPath>D:\SteamLibrary\steamapps\common\Schedule I\MelonLoader\Il2CppAssemblies\Assembly-CSharp.dll</HintPath>
-    </Reference>
-    <Reference Include="Il2CppFishNet.Runtime">
-      <HintPath>D:\SteamLibrary\steamapps\common\Schedule I\MelonLoader\Il2CppAssemblies\Il2CppFishNet.Runtime.dll</HintPath>
-    </Reference>
-    <Reference Include="Il2CppScheduleOne.Core">
-      <HintPath>D:\SteamLibrary\steamapps\common\Schedule I\MelonLoader\Il2CppAssemblies\Il2CppScheduleOne.Core.dll</HintPath>
+    <Reference Include="0Harmony">
+      <HintPath>$(ScheduleOneGameDir)\MelonLoader\net6\0Harmony.dll</HintPath>
+      <Private>false</Private>
     </Reference>
     <Reference Include="Il2CppInterop.Runtime">
-      <HintPath>D:\SteamLibrary\steamapps\common\Schedule I\MelonLoader\net6\Il2CppInterop.Runtime.dll</HintPath>
+      <HintPath>$(ScheduleOneGameDir)\MelonLoader\net6\Il2CppInterop.Runtime.dll</HintPath>
+      <Private>false</Private>
     </Reference>
+
+    <!-- Il2Cpp game assemblies (unhollowed by MelonLoader on first run) -->
     <Reference Include="Il2Cppmscorlib">
-      <HintPath>D:\SteamLibrary\steamapps\common\Schedule I\MelonLoader\Il2CppAssemblies\Il2Cppmscorlib.dll</HintPath>
+      <HintPath>$(ScheduleOneGameDir)\MelonLoader\Il2CppAssemblies\Il2Cppmscorlib.dll</HintPath>
+      <Private>false</Private>
     </Reference>
-    <Reference Include="MelonLoader">
-      <HintPath>D:\SteamLibrary\steamapps\common\Schedule I\MelonLoader\net6\MelonLoader.dll</HintPath>
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(ScheduleOneGameDir)\MelonLoader\Il2CppAssemblies\Assembly-CSharp.dll</HintPath>
+      <Private>false</Private>
     </Reference>
-    <Reference Include="Newtonsoft.Json">
-      <HintPath>D:\SteamLibrary\steamapps\common\Schedule I\MelonLoader\net35\Newtonsoft.Json.dll</HintPath>
+    <Reference Include="Il2CppFishNet.Runtime">
+      <HintPath>$(ScheduleOneGameDir)\MelonLoader\Il2CppAssemblies\Il2CppFishNet.Runtime.dll</HintPath>
+      <Private>false</Private>
     </Reference>
-    <Reference Include="System" />
-    <Reference Include="System.Core" />
-    <Reference Include="System.Xml.Linq" />
-    <Reference Include="System.Data.DataSetExtensions" />
-    <Reference Include="Microsoft.CSharp" />
-    <Reference Include="System.Data" />
-    <Reference Include="System.Net.Http" />
-    <Reference Include="System.Xml" />
+    <Reference Include="Il2CppScheduleOne.Core">
+      <HintPath>$(ScheduleOneGameDir)\MelonLoader\Il2CppAssemblies\Il2CppScheduleOne.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="UnityEngine">
-      <HintPath>D:\SteamLibrary\steamapps\common\Schedule I\MelonLoader\Il2CppAssemblies\UnityEngine.dll</HintPath>
+      <HintPath>$(ScheduleOneGameDir)\MelonLoader\Il2CppAssemblies\UnityEngine.dll</HintPath>
+      <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine.CoreModule">
-      <HintPath>D:\SteamLibrary\steamapps\common\Schedule I\MelonLoader\Il2CppAssemblies\UnityEngine.CoreModule.dll</HintPath>
+      <HintPath>$(ScheduleOneGameDir)\MelonLoader\Il2CppAssemblies\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <!-- Newtonsoft (ships in net35 dir) -->
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>$(ScheduleOneGameDir)\MelonLoader\net35\Newtonsoft.Json.dll</HintPath>
+      <Private>false</Private>
     </Reference>
   </ItemGroup>
-  <ItemGroup>
-    <Compile Include="Core\Constants.cs" />
-    <Compile Include="Core\DebugLog.cs" />
-    <Compile Include="Core\ModEntry.cs" />
-    <Compile Include="Core\DynamicEconomyCore.cs" />
-    <Compile Include="Models\CustomerProfile.cs" />
-    <Compile Include="Models\DeadDropState.cs" />
-    <Compile Include="Models\ModConfig.cs" />
-    <Compile Include="Models\ModSaveData.cs" />
-    <Compile Include="Models\ActiveEvent.cs" />
-    <Compile Include="Models\WholesaleRecord.cs" />
-    <Compile Include="Models\DeadDropDeal.cs" />
-    <Compile Include="Persistence\ConfigManager.cs" />
-    <Compile Include="Persistence\SaveManager.cs" />
-    <Compile Include="Systems\ScalingEngine.cs" />
-    <Compile Include="Systems\CustomerProfileManager.cs" />
-    <Compile Include="Systems\PricingEngine.cs" />
-    <Compile Include="Systems\DeadDropManager.cs" />
-    <Compile Include="Systems\EventManager.cs" />
-    <Compile Include="Patches\CustomerPatches.cs" />
-    <Compile Include="Patches\SaveManagerPatches.cs" />
-    <Compile Include="Patches\MoneyManagerPatches.cs" />
-    <Compile Include="UI\NotificationHelper.cs" />
-    <Compile Include="Properties\AssemblyInfo.cs" />
-  </ItemGroup>
-  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+
+  <!-- Auto-includes all .cs files. No explicit Compile entries needed. -->
+
 </Project>
