@@ -50,8 +50,8 @@ namespace DynamicOrdersMod.Systems
             if (RngNext() < dailyShortage)
             {
                 int duration = RngRange(config.ShortageDurationDays.Min, config.ShortageDurationDays.Max);
-                // Pick a random drug type — use empty string for "all drugs"
-                string[] drugTypes = { "Weed", "Cocaine", "Meth", "Heroin", "" };
+                // EDrugType enum names — empty string means "all drugs"
+                string[] drugTypes = { "Marijuana", "Methamphetamine", "Cocaine", "MDMA", "Shrooms", "Heroin", "" };
                 string drugType = drugTypes[_rng.Next(drugTypes.Length)];
 
                 SaveManager.Data.ActiveEvents.Add(new ActiveEvent
@@ -120,28 +120,41 @@ namespace DynamicOrdersMod.Systems
 
         /// <summary>
         /// Calculate overdose chance for a delivery.
+        /// Primary driver is product potency (highestAddiction from delivered items' effects).
+        /// Higher-than-expected quality INCREASES risk (customer's body can't handle the jump).
+        /// Lower-than-expected quality = BASE value (no reduction, no increase).
         /// </summary>
+        /// <param name="profile">Customer profile (tolerance/history factors)</param>
+        /// <param name="qualityDiff">qualityDifference out-param from EvaluateDelivery (&gt;0 = above expectation)</param>
+        /// <param name="productPotency">highestAddiction out-param from EvaluateDelivery (0-1, reflects mix composition)</param>
+        /// <param name="currentAddiction">Customer.CurrentAddiction (cumulative tolerance to the drug class)</param>
+        /// <param name="quantityFactor">Matched quantity / expected quantity (more consumed = more risk)</param>
         public static float CalculateOverdoseChance(
-            CustomerProfile profile, float qualityDiff, float mixIntensity,
-            float addiction, float dependenceMultiplier)
+            CustomerProfile profile, float qualityDiff, float productPotency,
+            float currentAddiction, float quantityFactor)
         {
             if (profile == null) return 0f;
+            if (productPotency <= 0f && currentAddiction <= 0f) return 0f;
             var config = ConfigManager.Config.Overdose;
 
-            // Base chance scaled by addiction and tolerance
-            float chance = config.BaseChance * addiction;
+            // Base chance scales with the delivered product's potency (mix composition)
+            // AND the customer's existing addiction (body's cumulative load)
+            float effectivePotency = Math.Max(productPotency, currentAddiction);
+            float chance = config.BaseChance * effectivePotency;
 
-            // Quality matters: negative qualityDiff (low quality) increases risk
-            if (qualityDiff < 0f)
-                chance += Math.Abs(qualityDiff) * 0.01f;
+            // Higher quality than expected → customer gets stronger hit than their body is used to → risk UP
+            // Lower quality than expected → no effect (base value, per design)
+            if (qualityDiff > 0f)
+                chance *= (1f + qualityDiff * 0.5f);
 
-            // Mix intensity (1.0 = pure, higher = more cut) — lower mix = less risk
-            chance *= mixIntensity;
+            // Quantity factor: more consumed = more risk (scales linearly, capped at 2x)
+            if (quantityFactor > 1f)
+                chance *= Math.Min(2f, quantityFactor);
 
-            // Tolerance reduces risk
+            // Tolerance reduces risk (experienced users handle it better)
             chance *= (1f - profile.Tolerance * 0.5f);
 
-            // Overdose history increases risk
+            // Overdose history increases risk (cumulative damage)
             chance *= (1f + profile.OverdoseCount * 0.3f);
 
             // Clamp to max
@@ -159,12 +172,17 @@ namespace DynamicOrdersMod.Systems
             var config = ConfigManager.Config.Overdose;
 
             profile.OverdoseCount++;
+            profile.LastOverdoseDay = currentDay;
             SaveManager.Data.Statistics.TotalOverdoses++;
 
             // Hospitalization
             profile.IsHospitalized = true;
             int hospDays = RngRange(config.HospitalizationDays.Min, config.HospitalizationDays.Max);
             profile.HospitalReleaseDay = currentDay + hospDays;
+
+            // Grace period: skip overdose rolls for 2 days after release to prevent
+            // immediate re-overdose chains that would permanently lock out the customer
+            profile.OverdoseGraceUntilDay = profile.HospitalReleaseDay + 2;
 
             // Relationship consequences on release (applied at release time in CustomerProfileManager)
             // Track for severity-based hits

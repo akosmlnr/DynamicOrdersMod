@@ -108,7 +108,7 @@ namespace DynamicOrdersMod.Core
             }
         }
 
-        private static bool IsHost()
+        public static bool IsHost()
         {
             try
             {
