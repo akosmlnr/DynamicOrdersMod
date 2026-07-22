@@ -3,6 +3,7 @@ using System.Linq;
 using MelonLoader;
 using HarmonyLib;
 using Il2CppInterop.Runtime;
+using DynamicOrdersMod.Systems;
 
 namespace DynamicOrdersMod.Core
 {
@@ -74,6 +75,17 @@ namespace DynamicOrdersMod.Core
                 tm.onSleepEnd += _sleepEndDelegate;
                 _timeHookSubscribed = true;
                 MelonLogger.Msg("[DynamicOrdersMod v3] Subscribed to TimeManager.onSleepEnd.");
+
+                // Initialize dead drop states now (scene loaded, DeadDrop.DeadDrops populated).
+                // In debug mode, this auto-discovers all drops so dead drop deals work immediately.
+                try
+                {
+                    DeadDropManager.InitializeDeadDropStates();
+                }
+                catch (System.Exception ex)
+                {
+                    MelonLogger.Warning($"[DynamicOrdersMod v3] DeadDrop init at startup failed: {ex.Message}");
+                }
             }
             catch { /* TimeManager not ready yet — keep polling */ }
         }

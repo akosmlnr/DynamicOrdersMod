@@ -414,10 +414,15 @@ namespace DynamicOrdersMod.Patches
     // PATCH 2: Customer.ProcessHandover POSTFIX
     // Tolerance growth + overdose roll using REAL delivered item data.
     // ============================================================
+    // PATCH 2: Customer.ProcessHandover PREFIX (not Postfix!)
+    // Must run BEFORE the game consumes items — GetItemData() returns null
+    // in Postfix because items are already destroyed.
+    // Also skips AI dealer-to-customer deals (handoverByPlayer == false).
+    // ============================================================
     [HarmonyPatch(typeof(Customer), "ProcessHandover")]
     public static class ProcessHandoverPatch
     {
-        public static void Postfix(
+        public static void Prefix(
             Customer __instance,
             HandoverScreen.EHandoverOutcome outcome,
             Contract contract,
@@ -431,6 +436,13 @@ namespace DynamicOrdersMod.Patches
                 string guid = null;
                 try { guid = __instance?.NPC?.GUID.ToString(); } catch { }
                 string tag = "cust=" + DebugLog.Short(guid);
+
+                // --- 1b. Skip AI dealer deals — we only track player handovers ---
+                if (!handoverByPlayer)
+                {
+                    DebugLog.Msg(tag, "ProcessHandover skip: not player-initiated (AI dealer deal)");
+                    return;
+                }
 
                 // --- 2. Guards ---
                 if (DynamicEconomyCore.Instance == null || !DynamicEconomyCore.Instance.ScalingEnabled)
