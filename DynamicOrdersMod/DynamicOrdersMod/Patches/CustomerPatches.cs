@@ -491,9 +491,6 @@ namespace DynamicOrdersMod.Patches
                     DebugLog.Warn(tag, $"expected product read failed: {ex.Message}");
                 }
 
-                DebugLog.Msg(tag,
-                    $"ProcessHandover expectedProductID=\"{expectedProductID}\" items_count={itemCount}");
-
                 // --- 6. Iterate items: matched count + potency ---
                 // Snapshot count first — Il2Cpp list may be modified by the game's
                 // consumption logic that runs during/after ProcessHandover.
@@ -501,6 +498,9 @@ namespace DynamicOrdersMod.Patches
                 float highestAddiction = 0f;
                 int itemCount = 0;
                 try { itemCount = items.Count; } catch { }
+
+                DebugLog.Msg(tag,
+                    $"ProcessHandover expectedProductID=\"{expectedProductID}\" items_count={itemCount}");
                 for (int i = 0; i < itemCount; i++)
                 {
                     ItemInstance item = null;
