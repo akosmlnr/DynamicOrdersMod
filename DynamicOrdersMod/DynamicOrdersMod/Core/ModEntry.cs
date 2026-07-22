@@ -154,10 +154,12 @@ namespace DynamicOrdersMod.Core
                 try { guid = customer.NPC?.GUID.ToString() ?? "?"; } catch { }
                 MelonLogger.Msg($"[DOM] [cust={DebugLog.Short(guid)}] CUSTOMER UNLOCKED — subscribing to UnityEvents");
 
-                // Subscribe to onDealCompleted — fires when the customer completes any deal
+                // Subscribe to onDealCompleted — fires when the customer completes any deal.
+                // Il2Cpp interop's UnityAction can't take a managed lambda directly (CS1660),
+                // so we wrap via DelegateSupport.ConvertDelegate like we do for Action fields.
                 if (customer.onDealCompleted != null)
                 {
-                    var action = new UnityAction(() =>
+                    var managedAction = new Action(() =>
                     {
                         try
                         {
@@ -169,13 +171,14 @@ namespace DynamicOrdersMod.Core
                             MelonLogger.Error($"[DOM] onDealCompleted handler error: {ex.Message}");
                         }
                     });
-                    customer.onDealCompleted.AddListener(action);
+                    var il2cppAction = DelegateSupport.ConvertDelegate<UnityAction>(managedAction);
+                    customer.onDealCompleted.AddListener(il2cppAction);
                 }
 
                 // Subscribe to onContractAssigned — fires with the Contract when assigned
                 if (customer.onContractAssigned != null)
                 {
-                    var action = new UnityAction<Il2CppScheduleOne.Quests.Contract>(contract =>
+                    var managedAction = new Action<Il2CppScheduleOne.Quests.Contract>(contract =>
                     {
                         try
                         {
@@ -187,7 +190,8 @@ namespace DynamicOrdersMod.Core
                             MelonLogger.Error($"[DOM] onContractAssigned handler error: {ex.Message}");
                         }
                     });
-                    customer.onContractAssigned.AddListener(action);
+                    var il2cppAction = DelegateSupport.ConvertDelegate<UnityAction<Il2CppScheduleOne.Quests.Contract>>(managedAction);
+                    customer.onContractAssigned.AddListener(il2cppAction);
                 }
             }
             catch (System.Exception ex)
