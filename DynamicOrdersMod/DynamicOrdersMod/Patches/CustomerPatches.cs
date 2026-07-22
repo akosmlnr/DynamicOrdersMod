@@ -19,6 +19,7 @@ namespace DynamicOrdersMod.Patches
         [HarmonyPostfix]
         static void GetWeightedRandomProductPostfix(
             Customer __instance,
+            Il2CppScheduleOne.Product.ProductDefinition __result,
             ref float appeal,
             ref int orderableQuantity)
         {
@@ -27,11 +28,24 @@ namespace DynamicOrdersMod.Patches
                 if (!DynamicEconomyCore.Instance?.ScalingEnabled ?? true) return;
                 if (__instance == null || orderableQuantity <= 1) return;
 
+                // Host-only: scaling modifies game state, must be authoritative
+                if (!DynamicEconomyCore.IsHost()) return;
+
                 var profile = CustomerProfileManager.GetOrCreateProfile(
                     __instance.NPC?.GUID.ToString());
                 if (profile == null) return;
 
-                // Task 5: Skip scaling for hospitalized or refusing customers
+                // Cache drug type and base quantity for EvaluateDelivery postfix
+                // (which uses them for proper tolerance growth and overdose quantity scaling)
+                if (__result != null)
+                {
+                    try { profile.LastRequestedDrugType = __result.DrugType.ToString(); }
+                    catch { }
+                }
+                int baseQuantity = orderableQuantity;
+                profile.LastRequestedQuantity = baseQuantity;
+
+                // Skip scaling for hospitalized or refusing customers
                 int currentDay = 0;
                 try { currentDay = TimeManager.Instance.ElapsedDays; }
                 catch { }
@@ -47,8 +61,11 @@ namespace DynamicOrdersMod.Patches
                     orderableQuantity, addiction, normalizedRel, profile.Tolerance,
                     ConfigManager.Config.Scaling);
 
-                // Task 2: Apply event order reduction (crackdown/shortage)
-                float reduction = EventManager.GetOrderReduction("", "");
+                // Apply event order reduction (crackdown/shortage) using cached drug type
+                string drugType = profile.LastRequestedDrugType ?? "";
+                string region = "";
+                try { region = __instance.NPC?.Region.ToString() ?? ""; } catch { }
+                float reduction = EventManager.GetOrderReduction(drugType, region);
                 scaled = Math.Max(1, (int)(scaled * reduction));
 
                 // Wholesale multiplier: bulk orders from wholesale-eligible customers
@@ -60,7 +77,6 @@ namespace DynamicOrdersMod.Patches
                     {
                         profile.IsWholesale = true;
                         profile.WholesaleWeeksActive = 0;
-                        // Task 7: Immediate save on wholesale status change
                         try { SaveManager.Save(); }
                         catch { }
                     }
@@ -148,29 +164,43 @@ namespace DynamicOrdersMod.Patches
                 CustomerProfileManager.ApplyToleranceGrowth(
                     profile, matchedProductCount, orderableQuantity, __instance.CurrentAddiction);
 
-                // Overdose roll using real quality and addiction data
-                float overdoseChance = EventManager.CalculateOverdoseChance(
-                    profile, qualityDifference, 1f, __instance.CurrentAddiction, 1f);
-                if (overdoseChance > 0f && (float)UnityEngine.Random.value < overdoseChance)
+                // Overdose roll using real quality, potency, and quantity data
+                // Skip if nothing was actually consumed (matchedProductCount == 0)
+                bool shouldRollOverdose = matchedProductCount > 0;
+                // Skip if in grace period after hospital release
+                if (shouldRollOverdose && profile.OverdoseGraceUntilDay > 0 && currentDay < profile.OverdoseGraceUntilDay)
+                    shouldRollOverdose = false;
+
+                if (shouldRollOverdose)
                 {
-                    bool overdosed = EventManager.ResolveOverdose(profile, currentDay);
-                    if (overdosed)
+                    // quantityFactor: how much was consumed relative to a "normal" single deal
+                    float quantityFactor = profile.LastRequestedQuantity > 0
+                        ? (float)matchedProductCount / Math.Max(1, profile.LastRequestedQuantity)
+                        : 1f;
+
+                    float overdoseChance = EventManager.CalculateOverdoseChance(
+                        profile, qualityDifference, highestAddiction,
+                        __instance.CurrentAddiction, quantityFactor);
+                    if (overdoseChance > 0f && (float)UnityEngine.Random.value < overdoseChance)
                     {
-                        // Task 4: Apply relationship consequences for 2nd+ overdose
-                        var overdoseConfig = ConfigManager.Config.Overdose;
-                        if (profile.OverdoseCount >= 2)
+                        bool overdosed = EventManager.ResolveOverdose(profile, currentDay);
+                        if (overdosed)
                         {
-                            try
+                            // Apply relationship consequences for 2nd+ overdose
+                            var overdoseConfig = ConfigManager.Config.Overdose;
+                            if (profile.OverdoseCount >= 2)
                             {
-                                __instance.NPC.RelationData.ChangeRelationship(
-                                    -overdoseConfig.SecondOverdoseRelationshipHit);
+                                try
+                                {
+                                    __instance.NPC.RelationData.ChangeRelationship(
+                                        -overdoseConfig.SecondOverdoseRelationshipHit);
+                                }
+                                catch { }
                             }
+
+                            try { SaveManager.Save(); }
                             catch { }
                         }
-
-                        // Task 7: Immediate save on overdose
-                        try { SaveManager.Save(); }
-                        catch { }
                     }
                 }
 
