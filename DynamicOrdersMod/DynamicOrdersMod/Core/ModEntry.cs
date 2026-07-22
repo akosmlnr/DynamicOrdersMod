@@ -184,6 +184,13 @@ namespace DynamicOrdersMod.Core
                         {
                             MelonLogger.Msg($"[DOM] [cust={DebugLog.Short(guid)}] onContractAssigned (UnityEvent) FIRED contract={contract}");
                             DynamicEconomyCore.Instance.OnCustomerContractAssigned(customer, contract);
+
+                            // Also subscribe to THIS contract's onComplete/onQuestEnd events
+                            // so we capture per-contract completion with item-level data.
+                            if (contract != null)
+                            {
+                                try { SubscribeToContractEvents(contract, guid); } catch { }
+                            }
                         }
                         catch (System.Exception ex)
                         {
@@ -197,6 +204,54 @@ namespace DynamicOrdersMod.Core
             catch (System.Exception ex)
             {
                 MelonLogger.Error($"[DOM] OnCustomerUnlocked error: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Subscribe to a Contract's onComplete and onQuestEnd UnityEvents.
+        /// These fire from native code when the contract completes/fails/expires,
+        /// giving us reliable per-contract completion signals.
+        /// </summary>
+        private static void SubscribeToContractEvents(Il2CppScheduleOne.Quests.Contract contract, string guid)
+        {
+            if (contract == null) return;
+
+            // onComplete — fires on successful contract completion
+            if (contract.onComplete != null)
+            {
+                var managedAction = new Action(() =>
+                {
+                    try
+                    {
+                        MelonLogger.Msg($"[DOM] [cust={DebugLog.Short(guid)}] contract.onComplete (UnityEvent) FIRED");
+                        DynamicEconomyCore.Instance.OnContractComplete(contract, guid);
+                    }
+                    catch (System.Exception ex)
+                    {
+                        MelonLogger.Error($"[DOM] contract.onComplete handler error: {ex.Message}");
+                    }
+                });
+                var il2cppAction = DelegateSupport.ConvertDelegate<UnityAction>(managedAction);
+                contract.onComplete.AddListener(il2cppAction);
+            }
+
+            // onQuestEnd — fires with the final EQuestState (Success/Failed/Expired/Cancelled)
+            if (contract.onQuestEnd != null)
+            {
+                var managedAction = new Action<Il2CppScheduleOne.Quests.EQuestState>(state =>
+                {
+                    try
+                    {
+                        MelonLogger.Msg($"[DOM] [cust={DebugLog.Short(guid)}] contract.onQuestEnd (UnityEvent) FIRED state={state}");
+                        DynamicEconomyCore.Instance.OnContractEnded(contract, guid, state);
+                    }
+                    catch (System.Exception ex)
+                    {
+                        MelonLogger.Error($"[DOM] contract.onQuestEnd handler error: {ex.Message}");
+                    }
+                });
+                var il2cppAction = DelegateSupport.ConvertDelegate<UnityAction<Il2CppScheduleOne.Quests.EQuestState>>(managedAction);
+                contract.onQuestEnd.AddListener(il2cppAction);
             }
         }
 
