@@ -9,6 +9,12 @@ namespace DynamicOrdersMod.Models
         public bool Enabled = true;
         public bool DebugLogging = false;
         public int ConfigVersion = 1;
+        /// <summary>
+        /// When true, dead drops and wholesale are available for ALL buyers regardless of
+        /// relationship, tolerance, or deal count. Also bypasses dead drop cooldown.
+        /// For TESTING ONLY — set to false for normal gameplay.
+        /// </summary>
+        public bool DebugUnlockAllFeatures = false;
     }
 
     [Serializable]

@@ -50,6 +50,18 @@ namespace DynamicOrdersMod.Systems
                 }
                 DebugLog.Msg("init",
                     $"DeadDrop states: total={SaveManager.Data.DeadDropStates.Count} new={newCount} existing={existingCount}");
+
+                // Debug mode: auto-discover all drops so dead drop deals can be tested
+                if (ConfigManager.Config.General.DebugUnlockAllFeatures)
+                {
+                    int discovered = 0;
+                    foreach (var kvp in SaveManager.Data.DeadDropStates)
+                    {
+                        if (!kvp.Value.IsDiscovered) { kvp.Value.IsDiscovered = true; discovered++; }
+                    }
+                    if (discovered > 0)
+                        DebugLog.Msg("init", $"DEBUG: auto-discovered {discovered} dead drops");
+                }
             }
             catch (Exception ex)
             {

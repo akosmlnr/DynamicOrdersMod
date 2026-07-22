@@ -240,35 +240,39 @@ namespace DynamicOrdersMod.Patches
                 return;
             }
 
-            // --- Skip: relationship too low ---
-            if (normalizedRel < ConfigManager.Config.Wholesale.MinRelationship)
+            // --- Skip: relationship too low (bypassed in debug mode) ---
+            bool debugUnlock = ConfigManager.Config.General.DebugUnlockAllFeatures;
+            if (!debugUnlock && normalizedRel < ConfigManager.Config.Wholesale.MinRelationship)
             {
                 DebugLog.Msg(tag, $"deaddrop skip: rel {normalizedRel:F2} < min {ConfigManager.Config.Wholesale.MinRelationship:F2}");
                 return;
             }
 
-            // --- Skip: no discovered drops ---
-            bool hasDiscovered = false;
-            try
+            // --- Skip: no discovered drops (bypassed in debug mode) ---
+            if (!debugUnlock)
             {
-                var states = SaveManager.Data.DeadDropStates;
-                if (states != null)
+                bool hasDiscovered = false;
+                try
                 {
-                    foreach (var kvp in states)
+                    var states = SaveManager.Data.DeadDropStates;
+                    if (states != null)
                     {
-                        if (kvp.Value != null && kvp.Value.IsDiscovered)
+                        foreach (var kvp in states)
                         {
-                            hasDiscovered = true;
-                            break;
+                            if (kvp.Value != null && kvp.Value.IsDiscovered)
+                            {
+                                hasDiscovered = true;
+                                break;
+                            }
                         }
                     }
                 }
-            }
-            catch { }
-            if (!hasDiscovered)
-            {
-                DebugLog.Msg(tag, "deaddrop skip: no discovered drops");
-                return;
+                catch { }
+                if (!hasDiscovered)
+                {
+                    DebugLog.Msg(tag, "deaddrop skip: no discovered drops");
+                    return;
+                }
             }
 
             // --- Skip: existing unresolved deal for this customer ---
@@ -286,16 +290,17 @@ namespace DynamicOrdersMod.Patches
                 }
             }
 
-            // --- Skip: cooldown active ---
-            if (profile.LastDeadDropFailDay > 0 &&
+            // --- Skip: cooldown active (bypassed in debug mode) ---
+            if (!debugUnlock && profile.LastDeadDropFailDay > 0 &&
                 currentDay - profile.LastDeadDropFailDay < ddConfig.TheftCooldownDays)
             {
                 DebugLog.Msg(tag, $"deaddrop skip: cooldown ({currentDay - profile.LastDeadDropFailDay}/{ddConfig.TheftCooldownDays}d)");
                 return;
             }
 
-            // --- 30% chance to redirect ---
-            if (UnityEngine.Random.value > 0.30f)
+            // --- 30% chance to redirect (100% in debug mode) ---
+            float redirectChance = debugUnlock ? 1.0f : 0.30f;
+            if (UnityEngine.Random.value > redirectChance)
             {
                 DebugLog.Msg(tag, "deaddrop skip: 30% roll missed");
                 return;
@@ -491,45 +496,31 @@ namespace DynamicOrdersMod.Patches
                     DebugLog.Warn(tag, $"expected product read failed: {ex.Message}");
                 }
 
-                // --- 6. Iterate items: matched count + potency ---
-                // Snapshot count first — Il2Cpp list may be modified by the game's
-                // consumption logic that runs during/after ProcessHandover.
+                // --- 6. Use the game's own matching logic to count matched items ---
+                // The 'items' list from ProcessHandover contains the FULL handover context
+                // (all items on screen), not just what the player placed in customer slots.
+                // Our manual ID matching fails because product IDs don't match directly.
+                // Instead, use Contract.GetProductListMatch which the game itself uses.
                 int matchedProductCount = 0;
+                float satisfaction = 0f;
+                try
+                {
+                    satisfaction = contract.GetProductListMatch(items, out matchedProductCount);
+                }
+                catch (Exception ex)
+                {
+                    DebugLog.Warn(tag, $"GetProductListMatch failed: {ex.Message}");
+                }
+
+                // --- 6b. Extract potency from items that are ProductItemInstance ---
                 float highestAddiction = 0f;
                 int itemCount = 0;
                 try { itemCount = items.Count; } catch { }
-
-                DebugLog.Msg(tag,
-                    $"ProcessHandover expectedProductID=\"{expectedProductID}\" items_count={itemCount}");
                 for (int i = 0; i < itemCount; i++)
                 {
                     ItemInstance item = null;
-                    try { item = items[i]; } catch { break; } // list modified, stop iterating
+                    try { item = items[i]; } catch { break; }
                     if (item == null) continue;
-
-                    string productID = "";
-                    int itemQty = 0;
-                    try
-                    {
-                        var data = item.GetItemData();
-                        if (data != null)
-                        {
-                            productID = data.ID ?? "";
-                            itemQty = data.Quantity;
-                        }
-                    }
-                    catch { }
-
-                    // Diagnostic: log each item's ID so we can see the mismatch
-                    if (!string.IsNullOrEmpty(productID))
-                        DebugLog.Msg(tag, $"  item[{i}] id=\"{productID}\" qty={itemQty}");
-
-                    if (productID == expectedProductID)
-                    {
-                        if (itemQty <= 0) itemQty = 1;
-                        matchedProductCount += itemQty;
-                    }
-
                     try
                     {
                         var prodItem = item as ProductItemInstance;

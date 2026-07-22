@@ -195,6 +195,8 @@ namespace DynamicOrdersMod.Systems
         public static bool MeetsWholesaleRequirements(CustomerProfile profile)
         {
             if (profile == null) return false;
+            // Debug override: unlock wholesale for all buyers
+            if (ConfigManager.Config.General.DebugUnlockAllFeatures) return true;
             var config = ConfigManager.Config.Wholesale;
             if (!config.Enabled) return false;
             if (profile.LifetimeDeals < config.MinCompletedDeals) return false;
