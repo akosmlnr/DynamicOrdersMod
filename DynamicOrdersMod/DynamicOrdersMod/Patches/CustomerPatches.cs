@@ -138,6 +138,12 @@ namespace DynamicOrdersMod.Patches
                 catch { }
                 if (currentDay <= 0) return;
 
+                // Cache current addiction for tolerance decay formula (Step 6)
+                profile.LastKnownAddiction = __instance.CurrentAddiction;
+
+                // Apply any deferred hospital-release relationship hit now that customer is interacting
+                CustomerProfileManager.ApplyPendingRelationshipHit(profile, __instance.NPC);
+
                 float satisfaction = __result;
                 string drugType = mainTypeType.ToString();
 

@@ -55,7 +55,15 @@ namespace DynamicOrdersMod.Systems
 
             foreach (var profile in SaveManager.Data.CustomerProfiles.Values)
             {
-                float decay = decayBase;
+                // Tolerance decay scales with addiction: highly addicted customers
+                // have built physical dependence and lose tolerance slower.
+                // Formula: decay = base * max(0.1, 1 - LastKnownAddiction)
+                // (clamp at 0.1 so decay never fully stops)
+                float addictionFactor = 1f;
+                if (profile.LastKnownAddiction > 0f)
+                    addictionFactor = Math.Max(0.1f, 1f - profile.LastKnownAddiction);
+                float decay = decayBase * addictionFactor;
+
                 if (decay > 0f && profile.Tolerance > 0f)
                     profile.Tolerance = Clamp(profile.Tolerance - decay);
                 UpdateHospitalization(profile, currentDay);
@@ -64,40 +72,73 @@ namespace DynamicOrdersMod.Systems
 
         private static void UpdateHospitalization(CustomerProfile profile, int currentDay)
         {
-            if (profile.IsHospitalized && currentDay >= profile.HospitalReleaseDay)
-            {
-                profile.IsHospitalized = false;
+            if (!profile.IsHospitalized) return;
+            if (currentDay < profile.HospitalReleaseDay) return;
 
-                // Task 4: Apply relationship consequences on hospital release
-                var config = ConfigManager.Config.Overdose;
-                try
+            profile.IsHospitalized = false;
+
+            // Compute the relationship hit to apply at release.
+            // Escalating severity: 1st overdose = base release hit,
+            // 2nd+ overdose = 2.5x base (configurable via SecondOverdoseRelationshipHit).
+            var config = ConfigManager.Config.Overdose;
+            float hit = config.ReleaseRelationshipHit;
+            if (profile.OverdoseCount >= 2)
+                hit = Math.Max(hit, config.SecondOverdoseRelationshipHit);
+            // Plus the daily decay accumulated during hospitalization
+            hit += config.HospitalRelationshipDecay;
+
+            // Apply directly via the game's NPC lookup.
+            // PendingRelationshipHit is a fallback for when the NPC isn't currently loaded.
+            bool applied = false;
+            try
+            {
+                var customers = Il2CppScheduleOne.Economy.Customer.UnlockedCustomers;
+                if (customers != null)
                 {
-                    var customers = Il2CppScheduleOne.Economy.Customer.UnlockedCustomers;
-                    if (customers != null)
+                    for (int i = 0; i < customers.Count; i++)
                     {
-                        for (int i = 0; i < customers.Count; i++)
+                        var cust = customers[i];
+                        if (cust == null) continue;
+                        string guid = null;
+                        try { guid = cust.NPC?.GUID.ToString(); } catch { }
+                        if (guid == profile.CustomerGuid)
                         {
-                            var cust = customers[i];
-                            if (cust == null) continue;
-                            string guid = null;
-                            try { guid = cust.NPC?.GUID.ToString(); } catch { }
-                            if (guid == profile.CustomerGuid)
-                            {
-                                float hit = config.HospitalRelationshipDecay + config.ReleaseRelationshipHit;
-                                if (hit > 0f)
-                                    cust.NPC.RelationData.ChangeRelationship(-hit);
-                                break;
-                            }
+                            cust.NPC.RelationData.ChangeRelationship(-hit);
+                            applied = true;
+                            break;
                         }
                     }
                 }
-                catch (Exception ex)
-                {
-                    MelonLogger.Warning($"[DynamicOrdersMod] Hospital release relationship error: {ex.Message}");
-                }
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Warning($"[DynamicOrdersMod] Hospital release relationship error: {ex.Message}");
+            }
 
-                if (ConfigManager.Config.General.DebugLogging)
-                    MelonLogger.Msg($"[DynamicOrdersMod] {profile.CustomerGuid} released from hospital.");
+            // If we couldn't apply immediately (NPC not loaded), defer to next interaction
+            if (!applied)
+                profile.PendingRelationshipHit = hit;
+
+            if (ConfigManager.Config.General.DebugLogging)
+                MelonLogger.Msg($"[DynamicOrdersMod] {profile.CustomerGuid} released from hospital. Hit={hit} applied={applied}");
+        }
+
+        /// <summary>
+        /// Applies any deferred relationship hit when the customer next interacts.
+        /// Called from EvaluateDelivery postfix when PendingRelationshipHit > 0.
+        /// </summary>
+        public static void ApplyPendingRelationshipHit(CustomerProfile profile, Il2CppScheduleOne.NPCs.NPC npc)
+        {
+            if (profile == null || npc == null) return;
+            if (profile.PendingRelationshipHit <= 0f) return;
+            try
+            {
+                npc.RelationData.ChangeRelationship(-profile.PendingRelationshipHit);
+                profile.PendingRelationshipHit = 0f;
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Warning($"[DynamicOrdersMod] Pending relationship hit error: {ex.Message}");
             }
         }
 
