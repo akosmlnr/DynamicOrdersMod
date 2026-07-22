@@ -91,14 +91,13 @@ namespace DynamicOrdersMod.Patches
                 try { currentDay = TimeManager.Instance.ElapsedDays; } catch { }
 
                 // --- 5b. Anti-double-scale guard ---
-                // OfferContract can fire multiple times for the same contract (build pass + finalize pass).
-                // Without this guard, the second pass sees the already-scaled baseQuantity and scales AGAIN,
-                // causing exponential growth. Skip if we already scaled for this customer today AND the
-                // incoming baseQuantity matches what we previously scaled FROM (meaning it's a re-fire).
-                // A FRESH contract offer will have a different baseQuantity than our last scaled value.
-                if (currentDay == profile.LastScaledDay && profile.LastScaledBaseQty == baseQuantity)
+                // OfferContract fires TWICE per contract (build pass + finalize pass).
+                // The second pass sees the already-scaled baseQuantity (we mutated entries[] in-place),
+                // so comparing base quantities doesn't work. Instead: only scale ONCE per customer per day.
+                // A customer only gets one new contract per day, so this is safe.
+                if (currentDay == profile.LastScaledDay)
                 {
-                    DebugLog.Msg(tag, $"OfferContract skip: already scaled today (day={currentDay}, base_qty={baseQuantity})");
+                    DebugLog.Msg(tag, $"OfferContract skip: already scaled today (day={currentDay})");
                     return;
                 }
 
@@ -193,7 +192,6 @@ namespace DynamicOrdersMod.Patches
 
                 // --- 16b. Record that we scaled (anti-double-scale guard) ---
                 profile.LastScaledDay = currentDay;
-                profile.LastScaledBaseQty = baseQuantity;
 
                 // --- 17. Dead drop interception ---
                 try
@@ -493,6 +491,9 @@ namespace DynamicOrdersMod.Patches
                     DebugLog.Warn(tag, $"expected product read failed: {ex.Message}");
                 }
 
+                DebugLog.Msg(tag,
+                    $"ProcessHandover expectedProductID=\"{expectedProductID}\" items_count={itemCount}");
+
                 // --- 6. Iterate items: matched count + potency ---
                 // Snapshot count first — Il2Cpp list may be modified by the game's
                 // consumption logic that runs during/after ProcessHandover.
@@ -518,6 +519,10 @@ namespace DynamicOrdersMod.Patches
                         }
                     }
                     catch { }
+
+                    // Diagnostic: log each item's ID so we can see the mismatch
+                    if (!string.IsNullOrEmpty(productID))
+                        DebugLog.Msg(tag, $"  item[{i}] id=\"{productID}\" qty={itemQty}");
 
                     if (productID == expectedProductID)
                     {
