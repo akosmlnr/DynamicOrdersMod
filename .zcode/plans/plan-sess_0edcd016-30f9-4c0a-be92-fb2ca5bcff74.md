@@ -1,172 +1,85 @@
-## DynamicOrdersMod v3 — Complete Remaining Features
+## Two changes: (1) Hook game save, (2) Comprehensive DebugLogging
 
-13 sequential steps across 13 files (11 modified, 1 new, 1 csproj). All changes build on the existing middleware architecture.
+### Part 1 — Mod saves whenever the game saves
 
-### Key API Reference (Decompiled → Il2CppInterop)
-- `ScheduleOne.*` → `Il2CppScheduleOne.*`
-- `NPC.RelationData.ChangeRelationship(float delta, bool network=true)` — modify relationship
-- `NPCRelationData.NormalizedRelationDelta` — 0-1 read-only
-- `DeadDrop.DeadDrops` (static List), `DeadDrop.Region` (EMapRegion field), `DeadDrop.DeadDropName` (string field)
-- `ProductDefinition.DrugType` (EDrugType), `ProductDefinition.BasePrice` (float field)
-- `MoneyManager.Instance.ChangeCashBalance(float, bool, bool)` — add/remove money
-- `EMapRegion`: Northtown, Westville, Downtown, Docks, Suburbia, Uptown
-- `EDrugType`: Marijuana, Methamphetamine, Cocaine, MDMA, Shrooms, Heroin
-- `EQuality`: Trash, Poor, Standard, Premium, Heavenly
+**New file:** `Patches/SaveManagerPatches.cs`
+- `[HarmonyPatch(typeof(Il2CppScheduleOne.Persistence.SaveManager), "Save")]` Postfix → calls `DynamicEconomyCore.Instance.OnGameSave()`
+- Also patch the `Save(string)` overload to catch folder-targeted saves
+- Host-only guard inside `OnGameSave` (clients shouldn't write mod save independently)
+- Existing `OnDayEnd` save stays — it's still the authoritative day-end flush
 
----
+**`Core/DynamicEconomyCore.cs`** — add:
+```csharp
+public void OnGameSave()
+{
+    if (!IsInitialized) return;
+    if (!IsHost()) return;
+    try { SaveManager.Save(); }
+    catch (System.Exception ex) { MelonLogger.Error($"[DynamicOrdersMod] OnGameSave error: {ex.Message}"); }
+}
+```
 
-### Step 1: Model Foundation
-**Files:** `Models/CustomerProfile.cs`, `Models/ModSaveData.cs`, NEW `Models/DeadDropDeal.cs`
+**`DynamicOrdersMod.csproj`** — add `<Compile Include="Patches\SaveManagerPatches.cs" />`
 
-**CustomerProfile.cs** — add fields:
-- `float LastKnownAddiction = 0f` — cached from EvaluateDelivery for decay calc
-- `float PendingRelationshipHit = 0f` — deferred relationship hit for hospital release
-- `string LastRequestedDrugType = ""` — cached from GetWeightedRandomProduct
-- `int LastRequestedQuantity = 0` — cached from GetWeightedRandomProduct
+### Part 2 — Comprehensive DebugLogging
 
-**ModSaveData.cs** — add:
-- `List<DeadDropDeal> ActiveDeadDropDeals = new List<DeadDropDeal>()`
+**New file:** `Core/DebugLog.cs` — tiny centralized helper to avoid `if (DebugLogging) MelonLogseer.Msg(...)` repetition everywhere:
+```csharp
+public static class DebugLog
+{
+    public static bool Enabled => ConfigManager.Config?.General?.DebugLogging ?? false;
+    public static void Msg(string tag, string msg)  { if (Enabled) MelonLogger.Msg($"[DOM] {tag} {msg}"); }
+    public static void Warn(string tag, string msg) { if (Enabled) MelonLogger.Warning($"[DOM] {tag} {msg}"); }
+    public static string Short(string guid) => string.IsNullOrEmpty(guid) ? "????????" : guid.Length <= 8 ? guid : guid.Substring(0, 8);
+}
+```
+Tag format: `[DOM] [a1b2c3d4] <event> <details>` (matches your answer). When `DebugLogging=false`, zero overhead (single bool check).
 
-**NEW DeadDropDeal.cs** — dead drop deal tracking model:
-- `DealId` (string), `CustomerGuid`, `DropGuid`, `DrugType` (string), `Quantity` (int), `Payment` (float), `IsPrepaid` (bool), `CreatedDay` (int), `WindowDay` (int), `IsResolved` (bool), `Result` (string: "pending"/"success"/"theft"/"police"/"nonpayment"/"expired")
+**Log points to add** (all gated via `DebugLog.Msg`):
 
-No SaveVersion bump — all new fields have safe defaults for backward compat.
+| File | Function | Log |
+|---|---|---|
+| `CustomerPatches.cs` | `GetWeightedRandomProductPostfix` | `[cust GUID] product=Heroin base_qty=2 → addiction_bonus=+1.8 rel_bonus=+0.3 tol_bonus=+0.5 rng_var=+0.12 binge=NO wholesale=NO → scaled=7` (full multiplier breakdown) |
+| `CustomerPatches.cs` | `ChangeAddictionPostfix` | `[cust GUID] ChangeAddiction original=+0.05 modified=+0.04 (tolerance_modifier=0.8)` |
+| `CustomerPatches.cs` | `EvaluateDeliveryPostfix` | `[cust GUID] delivery matched=3/3 payment=$120 satisfaction=0.85 qualityDiff=+0.2 highestAddiction=0.6` |
+| `CustomerPatches.cs` | `EvaluateDeliveryPostfix` (overdose roll) | `[cust GUID] overdose roll: chance=0.012 rolled=0.453 → NO` (or `→ YES`) |
+| `CustomerPatches.cs` | `TryGenerateContractPostfix` | `[cust GUID] dead drop contract: prepaid=true payment=$340 drop=drop_guid_8` (and skip reasons: `skipped: rel<0.4`, `skipped: tolerance<0.3`, `skipped: existing deal`) |
+| `TimeManagerPatches.cs` | `StartSleep Postfix` | `[day=N] OnDayEnd fired` |
+| `SaveManagerPatches.cs` (new) | `Save Postfix` | `[save] game save triggered, mod flushed N profiles, M deals` |
+| `DynamicEconomyCore.cs` | `OnDayEnd` | `[day=N] decay: applied to N profiles (addiction_factor avg=0.7)` |
+| `DynamicEconomyCore.cs` | `ResolveSingleDeal` | (existing log enhanced) `[deal ID] resolved: outcome=success payment=$X qty=3/5 quality=Premium rel_delta=+0.05` |
+| `DynamicEconomyCore.cs` | `ProcessWeeklyWholesale` | (existing log enhanced) `[week=N] wholesale: processed N customers, revenue=$X` |
+| `EventManager.cs` | `RollDailyEvents` | `[day=N] rolled: crackdown_chance=0.003 (NO), shortage_chance=0.007 (YES: Cocaine, 6 days)` |
+| `EventManager.cs` | `RemoveExpiredEvents` | `[day=N] expired N events` |
+| `EventManager.cs` | `CalculateOverdoseChance` | (called from patch already logs the roll; this logs the component breakdown if needed) — leave to patch to avoid double-logging |
+| `EventManager.cs` | `ResolveOverdose` | `[cust GUID] OVERDOSE count=N hospitalized_days=M release_day=D grace_until=G` |
+| `CustomerProfileManager.cs` | `ApplyToleranceGrowth` | `[cust GUID] tolerance +X (gain=0.01 * ratio=2.0 * dep=0.5)` |
+| `CustomerProfileManager.cs` | `UpdateHospitalization` | `[cust GUID] HOSPITAL RELEASED hit=X applied=true/false` (existing log, converted to DebugLog format) |
+| `CustomerProfileManager.cs` | `ApplyPendingRelationshipHit` | `[cust GUID] pending relationship hit applied: -X` |
+| `DeadDropManager.cs` | `EvaluateDelivery` | `[drop GUID] delivery: qty=3/5 highest_quality=Premium wrong_product=false` |
+| `DeadDropManager.cs` | `SelectDropForAsync` | `[drop GUID] selected (heat=0.12)` |
+| `DeadDropManager.cs` | `AddHeat` / `ReleaseDrop` | `[drop GUID] heat +X → Y` / `released` |
+| `DeadDropManager.cs` | `InitializeDeadDropStates` | `[init] registered N drops (new=M, existing=K)` |
+| `DeadDropManager.cs` | `TrySpawnDiscoveryQuests` | `[cust GUID] discovery: N quests spawned` |
+| `PricingEngine.cs` | `CalculateCustomerPrice` | `[cust GUID] price: base=$50 * loyalty=0.88 * addiction=1.10 * market=1.05 * event=1.00 → $50.7` (called from patch, log there with cust context) |
 
----
+**Skip reasons** (important for debugging why scaling/contracts aren't firing): every `return` in a postfix that bails early logs why — `skipped: customer not available`, `skipped: not host`, `skipped: orderableQuantity<=1`, etc. This is the #1 thing you need to see when "nothing is happening."
 
-### Step 2: Fix TryGenerateContract + Expose IsHost
-**Files:** `Patches/CustomerPatches.cs`, `Core/DynamicEconomyCore.cs`
+### Files touched
+- **New:** `Core/DebugLog.cs`, `Patches/SaveManagerPatches.cs`
+- **Modified:** `DynamicOrdersMod.csproj`, `Core/DynamicEconomyCore.cs`, `Core/ModEntry.cs` (no change — already calls PatchAll), `Persistence/SaveManager.cs` (no change), `Patches/CustomerPatches.cs`, `Patches/TimeManagerPatches.cs`, `Systems/EventManager.cs`, `Systems/CustomerProfileManager.cs`, `Systems/DeadDropManager.cs`, `Systems/PricingEngine.cs`
 
-**Critical bug fix:** Current prefix has `ref bool __result` but the method returns `ContractInfo`. The patch never matches.
-- Change to `ref Il2CppScheduleOne.Quests.ContractInfo __result`
-- Add `using Il2CppScheduleOne.Quests;`
+### Backward compat
+- No config schema change — uses existing `General.DebugLogging` flag
+- No save data migration — pure observability layer
+- When `DebugLogging=false`: zero allocations, zero Il2Cpp calls beyond the single bool check per site
 
-**DynamicEconomyCore.cs:** Change `private static bool IsHost()` → `public static bool IsHost()` so patches can check host authority.
+### Verification
+After implementing: pull on PC, set `"DebugLogging": true` in `%APPDATA%\DynamicOrdersMod\v3\config.json`, launch, and you should see a log line for every single mod event. Sleep in-game → day-end processing logs. Deliver product → scaling/tolerance/overdose logs. Game auto-saves → `[save]` log.
 
----
-
-### Step 3: Enhanced GetWeightedRandomProduct Postfix
-**File:** `Patches/CustomerPatches.cs`
-
-- Add `ref Il2CppScheduleOne.Product.ProductDefinition __result` to capture the returned product
-- After quantity scaling, apply `EventManager.GetOrderReduction(drugType, "")` to reduce orders during events
-- Store `__result.DrugType.ToString()` in `profile.LastRequestedDrugType` and `orderableQuantity` in `profile.LastRequestedQuantity`
-- Add host check: `if (!DynamicEconomyCore.IsHost()) return;` for data-modifying ops
-
----
-
-### Step 4: Improved EvaluateDelivery Postfix
-**File:** `Patches/CustomerPatches.cs`, `Systems/CustomerProfileManager.cs`
-
-Replace simplified tolerance/overdose logic with proper data:
-- Use `profile.LastRequestedDrugType` and `profile.LastRequestedQuantity` for proper `ApplyToleranceGrowth(profile, estimatedQty, baseQty, 1f)`
-- Call `profile.RecordPurchase(currentDay, drugType, estimatedQty, estimatedPayment)` with actual data instead of just `LifetimeDeals++`
-- Store `profile.LastKnownAddiction = __instance.CurrentAddiction` for decay formula
-- On overdose: apply immediate relationship hit via `__instance.NPC?.RelationData?.ChangeRelationship(-config.HospitalRelationshipDecay, false)`
-- Set `profile.PendingRelationshipHit` for larger release-time hit (scaled by overdose count)
-- Add host check
-
----
-
-### Step 5: Hospital Release Relationship System
-**File:** `Systems/CustomerProfileManager.cs`
-
-- In `UpdateHospitalization`: when releasing, set `PendingRelationshipHit`:
-  - 1st overdose: `config.ReleaseRelationshipHit` (0.3)
-  - 2nd+ overdose: `config.ReleaseRelationshipHit * 2.5f` (0.75)
-- Add `ApplyPendingHit(CustomerProfile profile, NPC npc)` method that calls `npc.RelationData.ChangeRelationship(-profile.PendingRelationshipHit)` and resets to 0
-- Call `ApplyPendingHit` from EvaluateDeliveryPostfix when `PendingRelationshipHit > 0` (customer is interacting again after release)
-
----
-
-### Step 6: Tolerance Decay Enhancement
-**File:** `Systems/CustomerProfileManager.cs`
-
-- Change decay formula in `ApplyDailyDecay`:
-  - Old: `decay = decayBase` (constant)
-  - New: `decay = decayBase * Math.Max(0.1f, 1f - profile.LastKnownAddiction)`
-  - Rationale: highly addicted customers should lose tolerance slower
-
----
-
-### Step 7: Event System Fixes
-**File:** `Systems/EventManager.cs`
-
-- Replace hardcoded `string[] regions = { "Downtown", "Uptown", "Suburbs", "Industrial", "" }` with actual `EMapRegion` enum names: `{ "Northtown", "Westville", "Downtown", "Docks", "Suburbia", "Uptown", "" }`
-- Replace hardcoded `string[] drugTypes = { "Weed", "Cocaine", "Meth", "Heroin", "" }` with `EDrugType` enum names: `{ "Marijuana", "Methamphetamine", "Cocaine", "MDMA", "Shrooms", "Heroin", "" }`
-- This ensures event checks match the game's actual data
-
----
-
-### Step 8: DeadDrop Manager Improvements
-**File:** `Systems/DeadDropManager.cs`
-
-- In `InitializeDeadDropStates`: use `drop.DeadDropName` (not `drop.name`) and `drop.Region.ToString()` for Region
-- In `ResolveDeadDrop`: multiply police intercept chance by `config.CrackdownDeadDropRiskMultiplier` when `EventManager.IsCrackdownActive(state.Region)` is true
-- After resolution: `SaveManager.Data.Statistics.TotalDeadDropsCompleted++` on success, `TotalDeadDropsFailed++` on failure
-- Add `using Il2CppScheduleOne.Deaddrop;` and `using Il2CppScheduleOne.Map;`
-
----
-
-### Step 9: Dead Drop Contract Interception
-**File:** `Patches/CustomerPatches.cs`
-
-In TryGenerateContract prefix, after existing eligibility checks pass:
-1. Call `DeadDropManager.SelectDropForAsync()` — if null, fall through to original (return true)
-2. Determine prepaid vs async: `UnityEngine.Random.value < config.PrepaidChance`
-3. Calculate payment: `PricingEngine.CalculateCustomerPrice(basePrice, addiction, deals, pricingConfig, events, drugType, shortageIncrease) * quantity`
-4. Create `DeadDropDeal` with all data, add to `SaveManager.Data.ActiveDeadDropDeals`
-5. If prepaid: `MoneyManager.Instance.ChangeCashBalance(payment * 0.8f, false, false)` (80% upfront)
-6. `NotificationHelper.Send(...)` informing player
-7. Set `__result = null`, return false (skip original contract generation)
-
----
-
-### Step 10: Dead Drop Deal Resolution
-**File:** `Core/DynamicEconomyCore.cs`
-
-New method `ResolveDeadDropDeals(int currentDay)`:
-- Iterate `SaveManager.Data.ActiveDeadDropDeals` where `WindowDay <= currentDay && !IsResolved`
-- Call `DeadDropManager.ResolveDeadDrop(deal.DropGuid, deal.IsPrepaid, true)` for outcome
-- **Success**: async → deposit full payment; prepaid → deposit remaining 20% bonus; relationship +0.05
-- **Theft**: relationship -0.1; notification
-- **Police**: relationship -0.2; notification about increased heat
-- **Non-payment** (async only): notification about lost payment
-- Mark `IsResolved = true`, set `Result`
-- Call from `OnDayEnd` after `EventManager.RollDailyEvents` and before `SaveManager.Save()`
-- Clean up resolved deals (remove from list or keep for history)
-
----
-
-### Step 11: Wholesale Revenue Tracking
-**Files:** `Core/DynamicEconomyCore.cs`, `Patches/MoneyManagerPatches.cs`
-
-- In `ProcessWeeklyWholesale`: replace the `$50-200` estimate with a calculation using `PricingEngine.CalculateWholesaleTotal()` and a reasonable base price per drug type
-- Track actual revenue: `SaveManager.Data.Statistics.TotalWholesaleRevenue += totalRevenue`
-- Add immediate `SaveManager.Save()` after wholesale processing
-
----
-
-### Step 12: Seeded RNG for Deterministic Multiplayer
-**File:** `Systems/ScalingEngine.cs`
-
-- Add `static int HashToSeed(string guid, int day)` — simple deterministic hash combining GUID and day
-- In `CalculateScaledQuantity`: accept optional seed parameter, use `new System.Random(seed)` when available
-- In `GetWeightedRandomProductPostfix`: pass `HashToSeed(customerGuid, currentDay)` as seed
-- This ensures all clients compute identical scaled quantities for the same customer on the same day
-
----
-
-### Step 13: Polish & csproj
-**Files:** `Core/DynamicEconomyCore.cs`, `DynamicOrdersMod.csproj`
-
-- Add `SaveManager.Save()` after overdose events in EvaluateDelivery
-- Add `SaveManager.Save()` after dead drop resolution
-- Add `<Compile Include="Models\DeadDropDeal.cs" />` to csproj
-
----
-
-### Execution Order
-Steps 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13
-
-Each step will be implemented, verified, and committed before moving to the next.
+### Execution order
+1. Create `DebugLog.cs` helper
+2. Create `SaveManagerPatches.cs` + `OnGameSave` method
+3. Update csproj with new files
+4. Wire DebugLog calls into each system/patch (one file at a time, commit per logical group)
+5. Single squashed commit at end (or 3-4 small commits — your call)

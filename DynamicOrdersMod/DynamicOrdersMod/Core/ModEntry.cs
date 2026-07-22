@@ -1,5 +1,7 @@
+using System;
 using MelonLoader;
 using HarmonyLib;
+using Il2CppInterop.Runtime;
 
 namespace DynamicOrdersMod.Core
 {
@@ -8,6 +10,7 @@ namespace DynamicOrdersMod.Core
         public static ModEntry Instance { get; private set; }
         private bool _timeHookSubscribed;
         private int _hookPollCounter;
+        private Il2CppSystem.Action _sleepEndDelegate;
 
         public override void OnInitializeMelon()
         {
@@ -39,10 +42,17 @@ namespace DynamicOrdersMod.Core
                 var tm = Il2CppScheduleOne.GameTime.TimeManager.Instance;
                 if (tm == null) return;
 
+                // Cache the delegate so we can unsubscribe the exact same instance later.
+                // Il2Cpp interop exposes the game's System.Action fields as Il2CppSystem.Action.
+                // DelegateSupport.ConvertDelegate wraps our managed method into the il2cpp delegate type.
+                if (_sleepEndDelegate == null)
+                    _sleepEndDelegate = DelegateSupport.ConvertDelegate<Il2CppSystem.Action>(
+                        new Action(DynamicEconomyCore.Instance.OnTimeSleepEnd));
+
                 // Subscribe to onSleepEnd — fires AFTER the sleep coroutine completes and the
-                /// day has rolled over (unlike StartSleep which fires when sleep begins).
-                /// This is the correct semantic moment for OnDayEnd processing.
-                tm.onSleepEnd += DynamicEconomyCore.Instance.OnTimeSleepEnd;
+                // day has rolled over (unlike StartSleep which fires when sleep begins).
+                // This is the correct semantic moment for OnDayEnd processing.
+                tm.onSleepEnd += _sleepEndDelegate;
                 _timeHookSubscribed = true;
                 MelonLogger.Msg("[DynamicOrdersMod v3] Subscribed to TimeManager.onSleepEnd.");
             }
@@ -56,8 +66,8 @@ namespace DynamicOrdersMod.Core
             try
             {
                 var tm = Il2CppScheduleOne.GameTime.TimeManager.Instance;
-                if (tm != null)
-                    tm.onSleepEnd -= DynamicEconomyCore.Instance.OnTimeSleepEnd;
+                if (tm != null && _sleepEndDelegate != null)
+                    tm.onSleepEnd -= _sleepEndDelegate;
             }
             catch { }
             _timeHookSubscribed = false;
