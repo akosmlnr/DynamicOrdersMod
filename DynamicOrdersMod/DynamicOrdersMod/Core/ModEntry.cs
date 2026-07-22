@@ -1,4 +1,6 @@
 using System;
+using System.Linq;
+using System.Reflection;
 using MelonLoader;
 using HarmonyLib;
 using UnityEngine.Events;
@@ -21,13 +23,29 @@ namespace DynamicOrdersMod.Core
 
             DynamicEconomyCore.Initialize();
 
-            var harmony = new HarmonyLib.Harmony("com.akosmlnr.dynamicordersmod.v3");
-            harmony.PatchAll();
-            LoggerInstance.Msg("[DynamicOrdersMod v3] Patches applied. All systems ready.");
+            // Use HarmonyInstance.PatchAll(Assembly) — matches the pattern used by working
+            // Schedule I mods (HonestMainMenu, Deal-Optimizer-Mod). The HarmonyInstance static
+            // accessor goes through MelonLoader's preferred patch processor path, and passing
+            // the assembly explicitly is more reliable than the parameterless overload.
+            try
+            {
+                HarmonyInstance.PatchAll(Assembly.GetExecutingAssembly());
+                LoggerInstance.Msg("[DynamicOrdersMod v3] Patches applied. All systems ready.");
+
+                // Log which methods actually got patched for diagnostic confirmation
+                var patchedMethods = HarmonyInstance
+                    .GetPatchedMethods()
+                    .Select(p => $"{p.DeclaringType?.FullName}.{p.Name}");
+                LoggerInstance.Msg($"[DynamicOrdersMod v3] Harmony patched methods: {string.Join(", ", patchedMethods)}");
+            }
+            catch (System.Exception ex)
+            {
+                LoggerInstance.Error($"[DynamicOrdersMod v3] Failed to apply Harmony patches: {ex.Message}");
+                LoggerInstance.Error(ex);
+            }
 
             // DIAGNOSTIC: log which patches actually bound to real methods.
-            // This tells us whether each HarmonyPatch attribute matched an existing game method.
-            LogPatchBindingStatus(harmony);
+            LogPatchBindingStatus(HarmonyInstance);
         }
 
         /// <summary>

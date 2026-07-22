@@ -10,31 +10,13 @@ using DynamicOrdersMod.Core;
 
 namespace DynamicOrdersMod.Patches
 {
-    /// <summary>
-    /// PROBE BUILD — testing which Harmony signatures actually bind in this
-    /// MelonLoader/Il2Cpp environment.
-    ///
-    /// Each patch below logs "[probe] <MethodName> FIRED" when it executes.
-    /// That's the ground truth — if the line appears, the patch works.
-    /// If it doesn't appear despite deals happening, the patch didn't bind
-    /// (even if the diagnostic says BOUND).
-    ///
-    /// After this build is tested, we'll know which scenario we're in:
-    ///   A: All 4 fire        -> full features possible
-    ///   B: Contract/Dealer only -> dead drops work, overdose uses proxy
-    ///   C: Only Contract     -> dead drops via InitializeContract, limited overdose
-    ///   D: None fire         -> polish current side-channel approach
-    /// </summary>
-    public static class CustomerPatches
+    // ============================================================
+    // PROBE 1: Customer.OfferContract PREFIX
+    // ============================================================
+    [HarmonyPatch(typeof(Customer), "OfferContract")]
+    public static class OfferContractPatch
     {
-        // ============================================================
-        // PROBE 1: Customer.OfferContract PREFIX
-        // Simplest possible Customer method signature.
-        // If this binds, ANY Customer method can be patched.
-        // ============================================================
-        [HarmonyPatch(typeof(Customer), "OfferContract")]
-        [HarmonyPrefix]
-        static void OfferContractProbePrefix(Customer __instance, ContractInfo info)
+        public static void Prefix(Customer __instance, ContractInfo info)
         {
             try
             {
@@ -47,15 +29,15 @@ namespace DynamicOrdersMod.Patches
                 MelonLogger.Error($"[DOM] [probe] OfferContract error: {ex.Message}");
             }
         }
+    }
 
-        // ============================================================
-        // PROBE 2: Customer.ProcessHandover POSTFIX
-        // Complex signature with List<ItemInstance> — the prize.
-        // If this binds, we get real item data for overdose potency.
-        // ============================================================
-        [HarmonyPatch(typeof(Customer), "ProcessHandover")]
-        [HarmonyPostfix]
-        static void ProcessHandoverProbePostfix(
+    // ============================================================
+    // PROBE 2: Customer.ProcessHandover POSTFIX
+    // ============================================================
+    [HarmonyPatch(typeof(Customer), "ProcessHandover")]
+    public static class ProcessHandoverPatch
+    {
+        public static void Postfix(
             Customer __instance,
             HandoverScreen.EHandoverOutcome outcome,
             Contract contract,
@@ -75,15 +57,15 @@ namespace DynamicOrdersMod.Patches
                 MelonLogger.Error($"[DOM] [probe] ProcessHandover error: {ex.Message}");
             }
         }
+    }
 
-        // ============================================================
-        // PROBE 3: Contract.InitializeContract POSTFIX
-        // Contract extends Quest (MonoBehaviour, NOT NetworkBehaviour).
-        // Better binding odds than Customer. Access state via __instance.
-        // ============================================================
-        [HarmonyPatch(typeof(Contract), "InitializeContract")]
-        [HarmonyPostfix]
-        static void InitializeContractProbePostfix(Contract __instance)
+    // ============================================================
+    // PROBE 3: Contract.InitializeContract POSTFIX
+    // ============================================================
+    [HarmonyPatch(typeof(Contract), "InitializeContract")]
+    public static class InitializeContractPatch
+    {
+        public static void Postfix(Contract __instance)
         {
             try
             {
@@ -96,14 +78,15 @@ namespace DynamicOrdersMod.Patches
                 MelonLogger.Error($"[DOM] [probe] InitializeContract error: {ex.Message}");
             }
         }
+    }
 
-        // ============================================================
-        // PROBE 4: Dealer.ContractedOffered PREFIX
-        // Dealer extends NPC. Tests whether Dealer methods bind.
-        // ============================================================
-        [HarmonyPatch(typeof(Dealer), "ContractedOffered")]
-        [HarmonyPrefix]
-        static void ContractedOfferedProbePrefix(Dealer __instance, ContractInfo contractInfo, Customer customer)
+    // ============================================================
+    // PROBE 4: Dealer.ContractedOffered PREFIX
+    // ============================================================
+    [HarmonyPatch(typeof(Dealer), "ContractedOffered")]
+    public static class ContractedOfferedPatch
+    {
+        public static void Prefix(Dealer __instance, ContractInfo contractInfo, Customer customer)
         {
             try
             {
