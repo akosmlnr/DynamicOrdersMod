@@ -496,31 +496,48 @@ namespace DynamicOrdersMod.Patches
                     DebugLog.Warn(tag, $"expected product read failed: {ex.Message}");
                 }
 
-                // --- 6. Use the game's own matching logic to count matched items ---
-                // The 'items' list from ProcessHandover contains the FULL handover context
-                // (all items on screen), not just what the player placed in customer slots.
-                // Our manual ID matching fails because product IDs don't match directly.
-                // Instead, use Contract.GetProductListMatch which the game itself uses.
+                // --- 6. Match items + extract potency ---
+                // The 'items' list from ProcessHandover contains the full handover context.
+                // We match by reading ItemData.ID (canonical product ID) and comparing to
+                // the contract's ProductList.Entry.ProductID.
                 int matchedProductCount = 0;
-                float satisfaction = 0f;
-                try
-                {
-                    satisfaction = contract.GetProductListMatch(items, out matchedProductCount);
-                }
-                catch (Exception ex)
-                {
-                    DebugLog.Warn(tag, $"GetProductListMatch failed: {ex.Message}");
-                }
-
-                // --- 6b. Extract potency from items that are ProductItemInstance ---
                 float highestAddiction = 0f;
                 int itemCount = 0;
                 try { itemCount = items.Count; } catch { }
+
+                DebugLog.Msg(tag,
+                    $"ProcessHandover expectedProductID=\"{expectedProductID}\" items_count={itemCount}");
                 for (int i = 0; i < itemCount; i++)
                 {
                     ItemInstance item = null;
                     try { item = items[i]; } catch { break; }
                     if (item == null) continue;
+
+                    // Try to get the product ID from the item
+                    string productID = "";
+                    int itemQty = 0;
+                    try
+                    {
+                        var data = item.GetItemData();
+                        if (data != null)
+                        {
+                            productID = data.ID ?? "";
+                            itemQty = data.Quantity;
+                        }
+                    }
+                    catch { }
+
+                    // Diagnostic: log each item's ID (only non-empty ones)
+                    if (!string.IsNullOrEmpty(productID))
+                        DebugLog.Msg(tag, $"  item[{i}] id=\"{productID}\" qty={itemQty}");
+
+                    if (!string.IsNullOrEmpty(productID) && productID == expectedProductID)
+                    {
+                        if (itemQty <= 0) itemQty = 1;
+                        matchedProductCount += itemQty;
+                    }
+
+                    // Extract potency from ProductItemInstance
                     try
                     {
                         var prodItem = item as ProductItemInstance;
