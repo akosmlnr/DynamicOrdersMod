@@ -46,6 +46,11 @@ namespace DynamicOrdersMod.Models
         // Overdose grace period: day until which overdose rolls are skipped
         // (prevents immediate re-overdose after hospital release)
         public int OverdoseGraceUntilDay = -1;
+        // Anti-double-scale: tracks the last day+baseQty we scaled for OfferContract.
+        // OfferContract can fire multiple times per contract (build + finalize);
+        // without this guard, scaling compounds exponentially.
+        public int LastScaledDay = -1;
+        public int LastScaledBaseQty = -1;
 
         public void RecordPurchase(int day, string drugType, int quantity, float totalSpent)
         {

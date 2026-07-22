@@ -90,6 +90,18 @@ namespace DynamicOrdersMod.Patches
                 int currentDay = 0;
                 try { currentDay = TimeManager.Instance.ElapsedDays; } catch { }
 
+                // --- 5b. Anti-double-scale guard ---
+                // OfferContract can fire multiple times for the same contract (build pass + finalize pass).
+                // Without this guard, the second pass sees the already-scaled baseQuantity and scales AGAIN,
+                // causing exponential growth. Skip if we already scaled for this customer today AND the
+                // incoming baseQuantity matches what we previously scaled FROM (meaning it's a re-fire).
+                // A FRESH contract offer will have a different baseQuantity than our last scaled value.
+                if (currentDay == profile.LastScaledDay && profile.LastScaledBaseQty == baseQuantity)
+                {
+                    DebugLog.Msg(tag, $"OfferContract skip: already scaled today (day={currentDay}, base_qty={baseQuantity})");
+                    return;
+                }
+
                 // --- 6. Availability (hospitalized / refusal) ---
                 if (currentDay > 0 && !CustomerProfileManager.IsCustomerAvailable(profile, currentDay))
                 {
@@ -178,6 +190,10 @@ namespace DynamicOrdersMod.Patches
                     $"addiction={addiction:F2} rel={normalizedRel:F2} tol={profile.Tolerance:F2} " +
                     $"seed={seed} pre_event={preEventScaled} event_reduction={reduction:F2} " +
                     $"-> scaled={scaled} payment=${finalPrice:F2} (basePay=${basePay:F2})");
+
+                // --- 16b. Record that we scaled (anti-double-scale guard) ---
+                profile.LastScaledDay = currentDay;
+                profile.LastScaledBaseQty = baseQuantity;
 
                 // --- 17. Dead drop interception ---
                 try
@@ -478,11 +494,16 @@ namespace DynamicOrdersMod.Patches
                 }
 
                 // --- 6. Iterate items: matched count + potency ---
+                // Snapshot count first — Il2Cpp list may be modified by the game's
+                // consumption logic that runs during/after ProcessHandover.
                 int matchedProductCount = 0;
                 float highestAddiction = 0f;
-                for (int i = 0; i < items.Count; i++)
+                int itemCount = 0;
+                try { itemCount = items.Count; } catch { }
+                for (int i = 0; i < itemCount; i++)
                 {
-                    var item = items[i];
+                    ItemInstance item = null;
+                    try { item = items[i]; } catch { break; } // list modified, stop iterating
                     if (item == null) continue;
 
                     string productID = "";
@@ -525,13 +546,14 @@ namespace DynamicOrdersMod.Patches
 
                 // --- 8. Quality difference ---
                 int qualityDifference = 0;
-                for (int i = 0; i < items.Count; i++)
+                for (int i = 0; i < itemCount; i++)
                 {
-                    var item = items[i];
-                    if (item == null) continue;
+                    ItemInstance qItem = null;
+                    try { qItem = items[i]; } catch { break; }
+                    if (qItem == null) continue;
                     try
                     {
-                        var qi = item as QualityItemInstance;
+                        var qi = qItem as QualityItemInstance;
                         if (qi != null)
                         {
                             int diff = (int)qi.Quality - expectedQuality;
@@ -646,6 +668,11 @@ namespace DynamicOrdersMod.Patches
     [HarmonyPatch(typeof(Contract), "Complete")]
     public static class ContractCompletePatch
     {
+        // Deduplicate: Contract.Complete fires 2-4 times per contract (network true/false,
+        // and possibly on both base Quest.Complete + Contract.Complete override).
+        // Track the last logged contract instance to avoid duplicate log spam.
+        private static WeakReference<Contract> _lastLogged = new WeakReference<Contract>(null);
+
         public static void Postfix(Contract __instance, bool network)
         {
             try
@@ -653,6 +680,12 @@ namespace DynamicOrdersMod.Patches
                 // --- 1. Guards ---
                 if (DynamicEconomyCore.Instance == null || !DynamicEconomyCore.Instance.ScalingEnabled) return;
                 if (__instance == null) return;
+
+                // --- 1b. Deduplicate — skip if we already logged this exact contract instance ---
+                Contract alreadyLogged;
+                if (_lastLogged.TryGetTarget(out alreadyLogged) && ReferenceEquals(alreadyLogged, __instance))
+                    return;
+                _lastLogged.SetTarget(__instance);
 
                 // --- 2. Resolve customer (NetworkObject -> Customer) ---
                 Customer customer = null;
