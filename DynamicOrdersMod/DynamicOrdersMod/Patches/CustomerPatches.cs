@@ -33,7 +33,7 @@ namespace DynamicOrdersMod.Patches
             try
             {
                 // --- 1. Identity ---
-                try { guid = __instance?.NPC?.GUID?.ToString(); } catch { }
+                try { guid = __instance?.NPC?.GUID.ToString(); } catch { }
                 string tag = "cust=" + DebugLog.Short(guid);
 
                 // --- 2. Guards ---
@@ -47,7 +47,7 @@ namespace DynamicOrdersMod.Patches
                     DebugLog.Msg(tag, "OfferContract skip: instance/info null");
                     return;
                 }
-                if (!DynamicEconomyCore.Instance.IsHost())
+                if (!DynamicEconomyCore.IsHost())
                 {
                     DebugLog.Msg(tag, "OfferContract skip: not host");
                     return;
@@ -410,7 +410,7 @@ namespace DynamicOrdersMod.Patches
             {
                 // --- 1. Identity ---
                 string guid = null;
-                try { guid = __instance?.NPC?.GUID?.ToString(); } catch { }
+                try { guid = __instance?.NPC?.GUID.ToString(); } catch { }
                 string tag = "cust=" + DebugLog.Short(guid);
 
                 // --- 2. Guards ---
@@ -672,7 +672,7 @@ namespace DynamicOrdersMod.Patches
 
                 // --- 4. Identity ---
                 string guid = null;
-                try { guid = customer.NPC?.GUID?.ToString(); } catch { }
+                try { guid = customer.NPC?.GUID.ToString(); } catch { }
                 string tag = "cust=" + DebugLog.Short(guid);
 
                 // --- 5. Payment + quantity ---
@@ -705,7 +705,7 @@ namespace DynamicOrdersMod.Patches
             {
                 // --- 1. Identity ---
                 string guid = null;
-                try { guid = __instance?.NPC?.GUID?.ToString(); } catch { }
+                try { guid = __instance?.NPC?.GUID.ToString(); } catch { }
                 string tag = "cust=" + DebugLog.Short(guid);
 
                 // --- 2. Guards ---
