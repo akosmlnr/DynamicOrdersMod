@@ -141,9 +141,11 @@ namespace DynamicOrdersMod.Core
                 try { currentDay = Il2CppScheduleOne.GameTime.TimeManager.Instance.ElapsedDays; }
                 catch { }
 
-                // Check if this contract was tied to an active dead drop deal
+                // Check if this contract was tied to an active dead drop deal.
+                // Contract exposes DeliveryLocation (a MonoBehaviour) — read its GUID.
+                // If the contract is a dead drop, the DeliveryLocation will be the DeadDrop's storage.
                 string deliveryGuid = null;
-                try { deliveryGuid = contract?.DeliveryLocationGUID; } catch { }
+                try { deliveryGuid = contract?.DeliveryLocation?.GUID.ToString(); } catch { }
 
                 var deals = SaveManager.Data?.ActiveDeadDropDeals;
                 if (deals != null && !string.IsNullOrEmpty(deliveryGuid))
@@ -306,7 +308,7 @@ namespace DynamicOrdersMod.Core
         /// 2. Scale quantity: mutate contract.ProductList.entries[i].Quantity in-place
         /// 3. Scale payment: mutate contract.Payment via PricingEngine
         /// 4. Apply event order reduction
-        /// 5. Dead drop interception: mutate contract.DeliveryLocationGUID when eligible
+        /// 5. Dead drop interception: mutate contract.DeliveryLocation when eligible
         /// </summary>
         public void OnCustomerContractAssigned(
             Il2CppScheduleOne.Economy.Customer customer,

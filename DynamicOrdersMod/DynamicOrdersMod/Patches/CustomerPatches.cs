@@ -88,7 +88,7 @@ namespace DynamicOrdersMod.Patches
             try
             {
                 string deliveryLoc = "?";
-                try { deliveryLoc = __instance?.DeliveryLocationGUID ?? "?"; } catch { }
+                try { deliveryLoc = __instance?.DeliveryLocation?.GUID.ToString() ?? "?"; } catch { }
                 MelonLogger.Msg($"[DOM] [probe] Contract.InitializeContract POSTFIX FIRED delivery_loc={deliveryLoc} payment={__instance?.Payment ?? 0:F2}");
             }
             catch (Exception ex)
