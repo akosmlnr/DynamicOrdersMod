@@ -49,6 +49,30 @@ namespace DynamicOrdersMod.Core
         }
 
         /// <summary>
+        /// Delegate target for TimeManager.onSleepEnd subscription.
+        /// Called by ModEntry.OnUpdate's subscriber after the sleep coroutine completes.
+        /// Reads the CURRENT (post-rollover) ElapsedDays and forwards to OnDayEnd.
+        ///
+        /// Why this exists: StartSleep fires when sleep BEGINS (before day increments),
+        /// so processing day-end there runs against stale state. onSleepEnd fires AFTER
+        /// the day rolls over, giving us the correct current day for decay/events/deals.
+        /// </summary>
+        public void OnTimeSleepEnd()
+        {
+            try
+            {
+                int currentDay = 0;
+                try { currentDay = Il2CppScheduleOne.GameTime.TimeManager.Instance.ElapsedDays; }
+                catch { }
+                OnDayEnd(currentDay);
+            }
+            catch (System.Exception ex)
+            {
+                MelonLogger.Error($"[DynamicOrdersMod] OnTimeSleepEnd error: {ex.Message}");
+            }
+        }
+
+        /// <summary>
         /// Called from SaveManagerPatches when the game writes its own save file.
         /// Mirrors the same write to the mod's saveData.json so the two never drift.
         /// Host-only: clients receive their state from the host, so they skip the write.

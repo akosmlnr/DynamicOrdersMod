@@ -92,7 +92,6 @@
     <Compile Include="Systems\DeadDropManager.cs" />
     <Compile Include="Systems\EventManager.cs" />
     <Compile Include="Patches\CustomerPatches.cs" />
-    <Compile Include="Patches\TimeManagerPatches.cs" />
     <Compile Include="Patches\SaveManagerPatches.cs" />
     <Compile Include="Patches\MoneyManagerPatches.cs" />
     <Compile Include="UI\NotificationHelper.cs" />
