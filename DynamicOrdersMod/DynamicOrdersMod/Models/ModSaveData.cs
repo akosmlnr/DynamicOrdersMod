@@ -11,6 +11,7 @@ namespace DynamicOrdersMod.Models
         public Dictionary<string, DeadDropState> DeadDropStates = new Dictionary<string, DeadDropState>();
         public List<ActiveEvent> ActiveEvents = new List<ActiveEvent>();
         public List<WholesaleRecord> WholesaleRecords = new List<WholesaleRecord>();
+        public List<DeadDropDeal> ActiveDeadDropDeals = new List<DeadDropDeal>();
         public ModStatistics Statistics = new ModStatistics();
     }
 

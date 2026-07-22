@@ -36,6 +36,17 @@ namespace DynamicOrdersMod.Models
         public List<PurchaseRecord> PurchaseHistory = new List<PurchaseRecord>();
         private const int MaxHistoryEntries = 50;
 
+        // Cached from EvaluateDelivery for decay calc and dead drop pricing
+        public float LastKnownAddiction = 0f;
+        // Deferred relationship hit applied when hospitalized customer returns
+        public float PendingRelationshipHit = 0f;
+        // Cached from GetWeightedRandomProduct for proper tolerance growth
+        public string LastRequestedDrugType = "";
+        public int LastRequestedQuantity = 0;
+        // Overdose grace period: day until which overdose rolls are skipped
+        // (prevents immediate re-overdose after hospital release)
+        public int OverdoseGraceUntilDay = -1;
+
         public void RecordPurchase(int day, string drugType, int quantity, float totalSpent)
         {
             PurchaseHistory.Add(new PurchaseRecord
