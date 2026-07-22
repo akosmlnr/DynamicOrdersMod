@@ -30,8 +30,8 @@ namespace DynamicOrdersMod.Systems
                     SaveManager.Data.DeadDropStates[guid] = new DeadDropState
                     {
                         DropGuid = guid,
-                        DropName = drop.name ?? "Unknown Drop",
-                        Region = drop.Region?.ToString() ?? "",
+                        DropName = drop.DeadDropName ?? (drop.name ?? "Unknown Drop"),
+                        Region = drop.Region.ToString(),
                         Heat = 0f,
                         IsDiscovered = false,
                         IsOccupied = false

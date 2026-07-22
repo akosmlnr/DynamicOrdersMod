@@ -4,12 +4,15 @@ using HarmonyLib;
 using Il2CppScheduleOne.Economy;
 using Il2CppScheduleOne.GameTime;
 using Il2CppScheduleOne.ItemFramework;
+using Il2CppScheduleOne.Money;
 using Il2CppScheduleOne.Product;
 using Il2CppScheduleOne.Quests;
 using MelonLoader;
 using DynamicOrdersMod.Core;
+using DynamicOrdersMod.Models;
 using DynamicOrdersMod.Persistence;
 using DynamicOrdersMod.Systems;
+using DynamicOrdersMod.UI;
 
 namespace DynamicOrdersMod.Patches
 {
@@ -210,23 +213,8 @@ namespace DynamicOrdersMod.Patches
                     }
                 }
 
-                // Task 3 continuation: Handle dead drop completion relationship bonus
-                if (profile.ActiveDeadDropPendingCompletion)
-                {
-                    profile.ActiveDeadDropPendingCompletion = false;
-                    var ddConfig = ConfigManager.Config.DeadDrop;
-                    if (ddConfig.SuccessRelationshipBonus > 0f)
-                    {
-                        try
-                        {
-                            __instance.NPC.RelationData.ChangeRelationship(ddConfig.SuccessRelationshipBonus);
-                        }
-                        catch { }
-                    }
-                    SaveManager.Data.Statistics.TotalDeadDropsCompleted++;
-                    try { SaveManager.Save(); }
-                    catch { }
-                }
+                // Dead drop completion is now handled by DynamicEconomyCore.ResolveDeadDropDeals
+                // which reads the dead drop's storage contents at the deal window and pays proportionally.
             }
             catch (Exception ex)
             {
@@ -243,6 +231,7 @@ namespace DynamicOrdersMod.Patches
                 if (!DynamicEconomyCore.Instance?.ScalingEnabled ?? true) return;
                 if (!ConfigManager.Config.DeadDrop.Enabled) return;
                 if (__instance == null || __result == null) return;
+                if (!DynamicEconomyCore.IsHost()) return;
 
                 var npc = __instance.NPC;
                 if (npc == null) return;
@@ -250,6 +239,13 @@ namespace DynamicOrdersMod.Patches
                 string guid = npc.GUID.ToString();
                 var profile = CustomerProfileManager.GetOrCreateProfile(guid);
                 if (profile == null) return;
+
+                // EDGE CASE: one active dead drop deal per customer (prevent stacking)
+                for (int i = 0; i < SaveManager.Data.ActiveDeadDropDeals.Count; i++)
+                {
+                    var existing = SaveManager.Data.ActiveDeadDropDeals[i];
+                    if (existing.CustomerGuid == guid && !existing.IsResolved) return;
+                }
 
                 // Check relationship
                 float normalizedRel = 0f;
@@ -275,43 +271,46 @@ namespace DynamicOrdersMod.Patches
 
                 var ddConfig = ConfigManager.Config.DeadDrop;
 
+                // Extract expected product details from the contract for later storage verification
+                string expectedProductID = "";
+                int expectedQuality = 2; // EQuality.Standard default
+                int expectedQuantity = 1;
+                try
+                {
+                    if (__result.Products?.entries != null && __result.Products.entries.Count > 0)
+                    {
+                        var entry = __result.Products.entries[0];
+                        expectedProductID = entry.ProductID ?? "";
+                        expectedQuality = (int)entry.Quality;
+                        expectedQuantity = entry.Quantity;
+                    }
+                }
+                catch { }
+
                 // Decide prepaid vs async
                 bool isPrepaid = (float)UnityEngine.Random.value < ddConfig.PrepaidChance;
 
-                // Store assignment on profile for later resolution
-                profile.ActiveDeadDropGuid = selectedDrop;
-                profile.ActiveDeadDropIsPrepaid = isPrepaid;
-                profile.ActiveDeadDropPendingCompletion = true;
+                // Base payment from contract
+                float basePayment = __result.Payment;
 
-                // Swap delivery location to dead drop
-                __result.DeliveryLocationGUID = selectedDrop;
-
-                // Apply async price premium
+                // Apply async price premium (customer pays more for the convenience/risk)
                 if (!isPrepaid)
                 {
                     float premium = ddConfig.AsyncPremiumMin +
                         (ddConfig.AsyncPremiumMax - ddConfig.AsyncPremiumMin) * (float)UnityEngine.Random.value;
-                    __result.Payment *= (1f + premium);
+                    basePayment *= (1f + premium);
                 }
 
-                // Wire PricingEngine: apply loyalty discount, addiction premium, market fluctuation, events
+                // Wire PricingEngine: loyalty discount, addiction premium, market fluctuation, events
                 try
                 {
-                    string drugName = "";
-                    try
-                    {
-                        if (__result.Products?.entries != null && __result.Products.entries.Count > 0)
-                            drugName = __result.Products.entries[0].ProductID ?? "";
-                    }
-                    catch { }
-
-                    __result.Payment = PricingEngine.CalculateCustomerPrice(
-                        __result.Payment,
+                    basePayment = PricingEngine.CalculateCustomerPrice(
+                        basePayment,
                         __instance.CurrentAddiction,
                         profile.SuccessfulDeals,
                         ConfigManager.Config.Pricing,
                         SaveManager.Data.ActiveEvents,
-                        drugName,
+                        profile.LastRequestedDrugType ?? "",
                         ConfigManager.Events.ShortagePriceIncrease);
                 }
                 catch (Exception ex)
@@ -320,7 +319,66 @@ namespace DynamicOrdersMod.Patches
                         MelonLogger.Warning($"[DynamicOrdersMod] Pricing engine error: {ex.Message}");
                 }
 
-                // Task 8: Discovery quests on first dead drop eligibility
+                // Round payment to 2 decimals to avoid float precision drift
+                basePayment = (float)Math.Round(basePayment, 2);
+
+                // Update the contract so the player sees the right delivery location and payment
+                __result.DeliveryLocationGUID = selectedDrop;
+                __result.Payment = basePayment;
+
+                // Create the DeadDropDeal record for tracking and resolution
+                string dealId = $"dd_{guid}_{currentDay}_{UnityEngine.Random.Range(1000, 9999)}";
+                var deal = new DeadDropDeal
+                {
+                    DealId = dealId,
+                    CustomerGuid = guid,
+                    DropGuid = selectedDrop,
+                    ExpectedProductID = expectedProductID,
+                    DrugType = profile.LastRequestedDrugType ?? "",
+                    ExpectedQuality = expectedQuality,
+                    ExpectedQuantity = expectedQuantity > 0 ? expectedQuantity : 1,
+                    Payment = basePayment,
+                    IsPrepaid = isPrepaid,
+                    CreatedDay = currentDay,
+                    WindowDay = currentDay + 1, // deliver by next day
+                    IsResolved = false,
+                    Result = "pending"
+                };
+                SaveManager.Data.ActiveDeadDropDeals.Add(deal);
+
+                // Store assignment on profile (backward compat with existing fields)
+                profile.ActiveDeadDropGuid = selectedDrop;
+                profile.ActiveDeadDropIsPrepaid = isPrepaid;
+                profile.ActiveDeadDropPendingCompletion = false; // resolved via DeadDropDeal now
+
+                // Prepaid: customer pays full amount upfront.
+                // The tradeoff: player gets guaranteed money, but skipping delivery
+                // incurs relationship/cooldown penalties (handled at resolution).
+                if (isPrepaid && basePayment > 0f)
+                {
+                    try
+                    {
+                        var moneyManager = Il2CppScheduleOne.Money.MoneyManager.Instance;
+                        if (moneyManager != null)
+                            moneyManager.ChangeCashBalance(basePayment, true, true);
+                    }
+                    catch (Exception ex)
+                    {
+                        MelonLogger.Warning($"[DynamicOrdersMod] Prepaid deposit failed: {ex.Message}");
+                    }
+
+                    NotificationHelper.Send("Dead Drop Contract (Prepaid)",
+                        $"Customer paid ${basePayment:F2} upfront. Deliver to the dead drop by tomorrow.",
+                        8f);
+                }
+                else
+                {
+                    NotificationHelper.Send("Dead Drop Contract",
+                        $"Customer wants {expectedQuantity}x {expectedProductID} at a dead drop. Payment on delivery: ${basePayment:F2}.",
+                        8f);
+                }
+
+                // Discovery quests on first dead drop eligibility
                 if (ddConfig.DiscoveryQuestEnabled && profile.DiscoveredDeadDrops.Count == 0)
                 {
                     try
@@ -333,6 +391,9 @@ namespace DynamicOrdersMod.Patches
                         MelonLogger.Warning($"[DynamicOrdersMod] Discovery quest error: {ex.Message}");
                     }
                 }
+
+                try { SaveManager.Save(); }
+                catch { }
             }
             catch (Exception ex)
             {
