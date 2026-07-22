@@ -27,7 +27,7 @@ namespace DynamicOrdersMod.Patches
             }
             catch (Exception ex)
             {
-                MelonLog.Error($"[DynamicOrdersMod] StartSleep postfix error: {ex.Message}");
+                MelonLogger.Error($"[DynamicOrdersMod] StartSleep postfix error: {ex.Message}");
             }
         }
     }
