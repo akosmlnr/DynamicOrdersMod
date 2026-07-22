@@ -248,31 +248,29 @@ namespace DynamicOrdersMod.Patches
                 return;
             }
 
-            // --- Skip: no discovered drops (bypassed in debug mode) ---
-            if (!debugUnlock)
+            // --- Skip: no discovered drops ---
+            // Debug mode unlocks eligibility, but discovery remains a real progression step.
+            bool hasDiscovered = false;
+            try
             {
-                bool hasDiscovered = false;
-                try
+                var states = SaveManager.Data.DeadDropStates;
+                if (states != null)
                 {
-                    var states = SaveManager.Data.DeadDropStates;
-                    if (states != null)
+                    foreach (var kvp in states)
                     {
-                        foreach (var kvp in states)
+                        if (kvp.Value != null && kvp.Value.IsDiscovered)
                         {
-                            if (kvp.Value != null && kvp.Value.IsDiscovered)
-                            {
-                                hasDiscovered = true;
-                                break;
-                            }
+                            hasDiscovered = true;
+                            break;
                         }
                     }
                 }
-                catch { }
-                if (!hasDiscovered)
-                {
-                    DebugLog.Msg(tag, "deaddrop skip: no discovered drops");
-                    return;
-                }
+            }
+            catch { }
+            if (!hasDiscovered)
+            {
+                DebugLog.Msg(tag, "deaddrop skip: no discovered drops (complete a discovery quest first)");
+                return;
             }
 
             // --- Skip: existing unresolved deal for this customer ---

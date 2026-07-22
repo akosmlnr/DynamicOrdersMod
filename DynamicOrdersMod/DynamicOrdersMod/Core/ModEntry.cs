@@ -4,6 +4,7 @@ using MelonLoader;
 using HarmonyLib;
 using Il2CppInterop.Runtime;
 using DynamicOrdersMod.Systems;
+using DynamicOrdersMod.Persistence;
 
 namespace DynamicOrdersMod.Core
 {
@@ -11,6 +12,7 @@ namespace DynamicOrdersMod.Core
     {
         public static ModEntry Instance { get; private set; }
         private bool _timeHookSubscribed;
+        private bool _saveFolderResolved;
         private int _hookPollCounter;
         private Il2CppSystem.Action _sleepEndDelegate;
 
@@ -21,16 +23,11 @@ namespace DynamicOrdersMod.Core
 
             DynamicEconomyCore.Initialize();
 
-            // Use HarmonyInstance.PatchAll(Assembly) — matches the pattern used by working
-            // Schedule I mods (HonestMainMenu, Deal-Optimizer-Mod). The HarmonyInstance static
-            // accessor goes through MelonLoader's preferred patch processor path, and passing
-            // the assembly explicitly is more reliable than the parameterless overload.
             try
             {
                 HarmonyInstance.PatchAll(System.Reflection.Assembly.GetExecutingAssembly());
                 LoggerInstance.Msg("[DynamicOrdersMod v3] Patches applied. All systems ready.");
 
-                // Log which methods actually got patched for diagnostic confirmation
                 var patchedMethods = HarmonyInstance
                     .GetPatchedMethods()
                     .Select(p => $"{p.DeclaringType?.FullName}.{p.Name}");
@@ -44,50 +41,65 @@ namespace DynamicOrdersMod.Core
         }
 
         /// <summary>
-        /// Poll for TimeManager.Instance availability and subscribe to onSleepEnd once ready.
-        /// TimeManager is a NetworkBehaviour singleton that spawns on scene load, so it is NOT
-        /// available during OnInitializeMelon. We poll OnUpdate (cheap — early return once subscribed)
-        /// until the singleton exists, then attach our day-end handler.
-        ///
-        /// This is the ONLY UnityEvent subscription remaining — day-end processing has no Harmony
-        /// equivalent (TimeManager.StartSleep fires too early, and the onSleepEnd Action delegate
-        /// is the only signal that fires AFTER the day rolls over).
+        /// Poll for game singletons (TimeManager, SaveManager) on scene load.
+        /// These are NetworkBehaviour singletons that spawn when the game loads a save.
+        /// Once available, we:
+        /// 1. Resolve the per-save folder (for proper save isolation between game saves)
+        /// 2. Subscribe to TimeManager.onSleepEnd (day-end processing)
+        /// 3. Initialize dead drop states
         /// </summary>
         public override void OnUpdate()
         {
-            if (_timeHookSubscribed) return;
+            if (_timeHookSubscribed && _saveFolderResolved) return;
 
-            // Cheap throttling — only check every 30 frames (~0.5s)
             if ((_hookPollCounter++ % 30) != 0) return;
 
-            try
+            // Step 1: Resolve the per-save folder BEFORE anything else.
+            // This ensures mod data loads from the correct save folder.
+            if (!_saveFolderResolved)
             {
-                var tm = Il2CppScheduleOne.GameTime.TimeManager.Instance;
-                if (tm == null) return;
-
-                // Cache the delegate so we can unsubscribe the exact same instance later.
-                if (_sleepEndDelegate == null)
-                    _sleepEndDelegate = DelegateSupport.ConvertDelegate<Il2CppSystem.Action>(
-                        new Action(DynamicEconomyCore.Instance.OnTimeSleepEnd));
-
-                // Subscribe to onSleepEnd — fires AFTER the sleep coroutine completes and the
-                // day has rolled over. This is the correct semantic moment for OnDayEnd processing.
-                tm.onSleepEnd += _sleepEndDelegate;
-                _timeHookSubscribed = true;
-                MelonLogger.Msg("[DynamicOrdersMod v3] Subscribed to TimeManager.onSleepEnd.");
-
-                // Initialize dead drop states now (scene loaded, DeadDrop.DeadDrops populated).
-                // In debug mode, this auto-discovers all drops so dead drop deals work immediately.
                 try
                 {
-                    DeadDropManager.InitializeDeadDropStates();
+                    SaveManager.ResolveSaveFolder();
+                    if (SaveManager.Data != null && Constants.ActiveSaveFolder != null)
+                    {
+                        _saveFolderResolved = true;
+                        MelonLogger.Msg($"[DynamicOrdersMod v3] Save folder resolved: {Constants.ActiveSaveFolder}");
+                    }
                 }
-                catch (System.Exception ex)
-                {
-                    MelonLogger.Warning($"[DynamicOrdersMod v3] DeadDrop init at startup failed: {ex.Message}");
-                }
+                catch { }
             }
-            catch { /* TimeManager not ready yet — keep polling */ }
+
+            // Step 2: Subscribe to TimeManager and init dead drops.
+            // Only after save folder is resolved so we don't create profiles in the wrong location.
+            if (_saveFolderResolved && !_timeHookSubscribed)
+            {
+                try
+                {
+                    var tm = Il2CppScheduleOne.GameTime.TimeManager.Instance;
+                    if (tm == null) return;
+
+                    if (_sleepEndDelegate == null)
+                        _sleepEndDelegate = DelegateSupport.ConvertDelegate<Il2CppSystem.Action>(
+                            new Action(DynamicEconomyCore.Instance.OnTimeSleepEnd));
+
+                    tm.onSleepEnd += _sleepEndDelegate;
+                    _timeHookSubscribed = true;
+                    MelonLogger.Msg("[DynamicOrdersMod v3] Subscribed to TimeManager.onSleepEnd.");
+
+                    // Initialize dead drop states (scene loaded, DeadDrop.DeadDrops populated).
+                    // In debug mode, drops are NOT auto-discovered — discovery quests spawn naturally.
+                    try
+                    {
+                        DeadDropManager.InitializeDeadDropStates();
+                    }
+                    catch (System.Exception ex)
+                    {
+                        MelonLogger.Warning($"[DynamicOrdersMod v3] DeadDrop init failed: {ex.Message}");
+                    }
+                }
+                catch { }
+            }
         }
 
         public override void OnApplicationQuit()

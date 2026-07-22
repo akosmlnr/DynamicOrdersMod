@@ -16,12 +16,12 @@ namespace DynamicOrdersMod.Systems
         public static void InitializeDeadDropStates()
         {
             if (_initialized) return;
-            _initialized = true;
             try
             {
                 // Scan game's DeadDrop.DeadDrops list, register any not in save data
                 var drops = Il2CppScheduleOne.Economy.DeadDrop.DeadDrops;
-                if (drops == null) return;
+                if (drops == null || drops.Count == 0) return;
+                _initialized = true;
                 int newCount = 0;
                 int existingCount = 0;
                 for (int i = 0; i < drops.Count; i++)
@@ -51,16 +51,54 @@ namespace DynamicOrdersMod.Systems
                 DebugLog.Msg("init",
                     $"DeadDrop states: total={SaveManager.Data.DeadDropStates.Count} new={newCount} existing={existingCount}");
 
-                // Debug mode: auto-discover all drops so dead drop deals can be tested
+                // Debug mode: spawn discovery quests for first 5 undiscovered drops
+                // so the player can discover them naturally (HUD quest + map markers).
+                // Drops are NOT auto-discovered — player must find them via the quests.
                 if (ConfigManager.Config.General.DebugUnlockAllFeatures)
                 {
-                    int discovered = 0;
+                    var undiscovered = new List<string>();
                     foreach (var kvp in SaveManager.Data.DeadDropStates)
                     {
-                        if (!kvp.Value.IsDiscovered) { kvp.Value.IsDiscovered = true; discovered++; }
+                        if (!kvp.Value.IsDiscovered) undiscovered.Add(kvp.Key);
                     }
-                    if (discovered > 0)
-                        DebugLog.Msg("init", $"DEBUG: auto-discovered {discovered} dead drops");
+                    if (undiscovered.Count > 0)
+                    {
+                        DebugLog.Msg("init", $"DEBUG: spawning discovery quests for {Math.Min(5, undiscovered.Count)} undiscovered drops");
+                        try
+                        {
+                            var questManager = Il2CppScheduleOne.Quests.QuestManager.Instance;
+                            if (questManager != null)
+                            {
+                                int toSpawn = Math.Min(5, undiscovered.Count);
+                                for (int i = 0; i < toSpawn; i++)
+                                {
+                                    try
+                                    {
+                                        var quest = questManager.CreateDeaddropCollectionQuest(undiscovered[i]);
+                                        if (quest != null)
+                                        {
+                                            quest.Begin();
+                                            DebugLog.Msg("drop=" + DebugLog.Short(undiscovered[i]),
+                                                "discovery quest created and started (drop remains undiscovered until found)");
+                                        }
+                                    }
+                                    catch (Exception qex)
+                                    {
+                                        DebugLog.Warn("drop=" + DebugLog.Short(undiscovered[i]),
+                                            $"discovery quest failed: {qex.Message}");
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                DebugLog.Warn("init", "QuestManager.Instance null — can't spawn discovery quests");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            DebugLog.Warn("init", $"discovery quest batch failed: {ex.Message}");
+                        }
+                    }
                 }
             }
             catch (Exception ex)
@@ -516,9 +554,8 @@ namespace DynamicOrdersMod.Systems
                     if (quest != null)
                     {
                         quest.Begin();
-                        var state = GetState(dropGuid);
-                        if (state != null) state.IsDiscovered = true;
-                        profile.DiscoveredDeadDrops.Add(dropGuid);
+                        // Quest completion/native discovery is authoritative; do not mark the drop
+                        // discovered merely because its tracker was spawned.
                         spawned++;
                     }
                 }

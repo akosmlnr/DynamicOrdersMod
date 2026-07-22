@@ -23,22 +23,15 @@ namespace DynamicOrdersMod.Patches
         /// </summary>
         public static void ResolveIfMissing()
         {
-            if (Constants.ActiveSaveFolder != null) return;
             try
             {
                 var sm = Il2CppScheduleOne.Persistence.SaveManager.Instance;
                 if (sm == null) return;
                 string playersPath = sm.PlayersSavePath;
-                if (!string.IsNullOrEmpty(playersPath))
-                {
-                    var dir = Path.GetDirectoryName(playersPath);
-                    if (!string.IsNullOrEmpty(dir))
-                    {
-                        Constants.ActiveSaveFolder = dir;
-                        // Trigger per-save reload now that we know the folder
-                        SaveManager.ReloadForActiveSave();
-                    }
-                }
+                if (string.IsNullOrEmpty(playersPath)) return;
+                string dir = Path.GetDirectoryName(playersPath);
+                if (!string.IsNullOrEmpty(dir))
+                    SaveManager.ResolveExplicitSaveFolder(dir);
             }
             catch { }
         }
@@ -67,7 +60,9 @@ namespace DynamicOrdersMod.Patches
         static void Postfix(string saveFolderPath)
         {
             if (!string.IsNullOrEmpty(saveFolderPath))
-                Constants.ActiveSaveFolder = saveFolderPath;
+                SaveManager.ResolveExplicitSaveFolder(saveFolderPath);
+            else
+                SaveFolderHelper.ResolveIfMissing();
 
             var core = DynamicEconomyCore.Instance;
             if (core == null) return;
