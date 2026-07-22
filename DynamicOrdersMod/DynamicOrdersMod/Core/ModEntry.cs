@@ -1,6 +1,7 @@
 using System;
 using MelonLoader;
 using HarmonyLib;
+using UnityEngine.Events;
 using Il2CppInterop.Runtime;
 
 namespace DynamicOrdersMod.Core
@@ -11,6 +12,7 @@ namespace DynamicOrdersMod.Core
         private bool _timeHookSubscribed;
         private int _hookPollCounter;
         private Il2CppSystem.Action _sleepEndDelegate;
+        private Il2CppSystem.Action<Il2CppScheduleOne.Economy.Customer> _customerUnlockedDelegate;
 
         public override void OnInitializeMelon()
         {
@@ -22,6 +24,58 @@ namespace DynamicOrdersMod.Core
             var harmony = new HarmonyLib.Harmony("com.akosmlnr.dynamicordersmod.v3");
             harmony.PatchAll();
             LoggerInstance.Msg("[DynamicOrdersMod v3] Patches applied. All systems ready.");
+
+            // DIAGNOSTIC: log which patches actually bound to real methods.
+            // This tells us whether each HarmonyPatch attribute matched an existing game method.
+            LogPatchBindingStatus(harmony);
+        }
+
+        /// <summary>
+        /// For each intended target method, query Harmony to see if any patches are bound.
+        /// Methods that didn't bind show zero patches — meaning the attribute didn't match
+        /// a real method on the Il2Cpp type.
+        /// </summary>
+        private void LogPatchBindingStatus(HarmonyLib.Harmony harmony)
+        {
+            try
+            {
+                var targets = new[]
+                {
+                    ("Customer.OfferContract", typeof(Il2CppScheduleOne.Economy.Customer), "OfferContract"),
+                    ("Customer.ContractAccepted", typeof(Il2CppScheduleOne.Economy.Customer), "ContractAccepted"),
+                    ("Customer.ProcessHandover", typeof(Il2CppScheduleOne.Economy.Customer), "ProcessHandover"),
+                    ("Customer.CurrentContractEnded", typeof(Il2CppScheduleOne.Economy.Customer), "CurrentContractEnded"),
+                    ("Customer.RpcLogic___ChangeAddiction_431000436", typeof(Il2CppScheduleOne.Economy.Customer), "RpcLogic___ChangeAddiction_431000436"),
+                    ("Contract.Complete", typeof(Il2CppScheduleOne.Quests.Contract), "Complete"),
+                    ("SaveManager.Save()", typeof(Il2CppScheduleOne.Persistence.SaveManager), "Save"),
+                };
+                foreach (var (label, type, methodName) in targets)
+                {
+                    try
+                    {
+                        var method = HarmonyLib.AccessTools.Method(type, methodName);
+                        if (method != null)
+                        {
+                            var info = HarmonyLib.PatchProcessor.GetPatchInfo(method);
+                            int pre = info?.Prefixes?.Count ?? 0;
+                            int post = info?.Postfixes?.Count ?? 0;
+                            MelonLogger.Msg($"[Diagnostic] {label}: BOUND (prefixes={pre}, postfixes={post})");
+                        }
+                        else
+                        {
+                            MelonLogger.Msg($"[Diagnostic] {label}: METHOD NOT FOUND via AccessTools");
+                        }
+                    }
+                    catch (System.Exception ex)
+                    {
+                        MelonLogger.Msg($"[Diagnostic] {label}: ERROR {ex.Message}");
+                    }
+                }
+            }
+            catch (System.Exception ex)
+            {
+                MelonLogger.Error($"[Diagnostic] Status log failed: {ex.Message}");
+            }
         }
 
         /// <summary>
@@ -55,8 +109,91 @@ namespace DynamicOrdersMod.Core
                 tm.onSleepEnd += _sleepEndDelegate;
                 _timeHookSubscribed = true;
                 MelonLogger.Msg("[DynamicOrdersMod v3] Subscribed to TimeManager.onSleepEnd.");
+
+                // FALLBACK: subscribe to Customer.onCustomerUnlocked (static Action) so we can
+                // hook each customer's UnityEvents as they unlock. This bypasses Harmony entirely
+                // and uses Unity's event system — more reliable for methods that may not bind.
+                try
+                {
+                    if (_customerUnlockedDelegate == null)
+                        _customerUnlockedDelegate = DelegateSupport.ConvertDelegate<Il2CppSystem.Action<Il2CppScheduleOne.Economy.Customer>>(
+                            new Action<Il2CppScheduleOne.Economy.Customer>(OnCustomerUnlocked));
+                    Il2CppScheduleOne.Economy.Customer.onCustomerUnlocked += _customerUnlockedDelegate;
+                    MelonLogger.Msg("[DynamicOrdersMod v3] Subscribed to Customer.onCustomerUnlocked.");
+
+                    // Also subscribe to any customers already unlocked before we hooked the event
+                    var already = Il2CppScheduleOne.Economy.Customer.UnlockedCustomers;
+                    if (already != null)
+                    {
+                        for (int i = 0; i < already.Count; i++)
+                        {
+                            try { OnCustomerUnlocked(already[i]); } catch { }
+                        }
+                        MelonLogger.Msg($"[DynamicOrdersMod v3] Retro-subscribed {already.Count} already-unlocked customers.");
+                    }
+                }
+                catch (System.Exception ex)
+                {
+                    MelonLogger.Error($"[DynamicOrdersMod v3] Customer event subscription failed: {ex.Message}");
+                }
             }
             catch { /* TimeManager not ready yet — keep polling */ }
+        }
+
+        /// <summary>
+        /// Called when a customer unlocks. Subscribes to that customer's UnityEvents
+        /// (onDealCompleted, onContractAssigned) as a fallback for when Harmony patches
+        /// don't bind. UnityEvents fire regardless of caller language (native or managed).
+        /// </summary>
+        private static void OnCustomerUnlocked(Il2CppScheduleOne.Economy.Customer customer)
+        {
+            if (customer == null) return;
+            try
+            {
+                string guid = "?";
+                try { guid = customer.NPC?.GUID.ToString() ?? "?"; } catch { }
+                MelonLogger.Msg($"[DOM] [cust={DebugLog.Short(guid)}] CUSTOMER UNLOCKED — subscribing to UnityEvents");
+
+                // Subscribe to onDealCompleted — fires when the customer completes any deal
+                if (customer.onDealCompleted != null)
+                {
+                    var action = new UnityAction(() =>
+                    {
+                        try
+                        {
+                            MelonLogger.Msg($"[DOM] [cust={DebugLog.Short(guid)}] onDealCompleted (UnityEvent) FIRED");
+                            DynamicEconomyCore.Instance.OnCustomerDealCompleted(customer);
+                        }
+                        catch (System.Exception ex)
+                        {
+                            MelonLogger.Error($"[DOM] onDealCompleted handler error: {ex.Message}");
+                        }
+                    });
+                    customer.onDealCompleted.AddListener(action);
+                }
+
+                // Subscribe to onContractAssigned — fires with the Contract when assigned
+                if (customer.onContractAssigned != null)
+                {
+                    var action = new UnityAction<Il2CppScheduleOne.Quests.Contract>(contract =>
+                    {
+                        try
+                        {
+                            MelonLogger.Msg($"[DOM] [cust={DebugLog.Short(guid)}] onContractAssigned (UnityEvent) FIRED contract={contract}");
+                            DynamicEconomyCore.Instance.OnCustomerContractAssigned(customer, contract);
+                        }
+                        catch (System.Exception ex)
+                        {
+                            MelonLogger.Error($"[DOM] onContractAssigned handler error: {ex.Message}");
+                        }
+                    });
+                    customer.onContractAssigned.AddListener(action);
+                }
+            }
+            catch (System.Exception ex)
+            {
+                MelonLogger.Error($"[DOM] OnCustomerUnlocked error: {ex.Message}");
+            }
         }
 
         public override void OnApplicationQuit()

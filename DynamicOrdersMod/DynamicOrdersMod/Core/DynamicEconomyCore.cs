@@ -73,6 +73,99 @@ namespace DynamicOrdersMod.Core
         }
 
         /// <summary>
+        /// Called from Customer.onDealCompleted UnityEvent (subscribed by ModEntry).
+        /// This is a FALLBACK for when the Harmony patch on Contract.Complete doesn't bind.
+        /// </summary>
+        public void OnCustomerDealCompleted(Il2CppScheduleOne.Economy.Customer customer)
+        {
+            try
+            {
+                if (!IsInitialized || !ScalingEnabled) return;
+                if (!IsHost()) return;
+                if (customer == null) return;
+
+                string guid = null;
+                try { guid = customer.NPC?.GUID.ToString(); } catch { }
+                string tag = "cust=" + DebugLog.Short(guid);
+                DebugLog.Msg(tag, "OnCustomerDealCompleted (UnityEvent fallback)");
+
+                var profile = CustomerProfileManager.GetOrCreateProfile(guid);
+                if (profile == null) return;
+
+                int currentDay = 0;
+                try { currentDay = Il2CppScheduleOne.GameTime.TimeManager.Instance.ElapsedDays; }
+                catch { }
+
+                // Without item details, record a basic success. The Harmony patches
+                // will have already handled the detailed tracking if they bound.
+                float payment = 0f;
+                int qty = 1;
+                try
+                {
+                    var contract = customer.CurrentContract;
+                    if (contract != null)
+                    {
+                        payment = contract.Payment;
+                        qty = contract.ProductList?.GetTotalQuantity() ?? 1;
+                    }
+                }
+                catch { }
+
+                profile.RecordPurchase(currentDay, profile.LastRequestedDrugType ?? "", qty, payment);
+                profile.RecordSuccess();
+                DebugLog.Msg(tag, $"FALLBACK recorded purchase qty={qty} payment=${payment:F2} lifetime={profile.LifetimeDeals}");
+                SaveManager.Save();
+            }
+            catch (System.Exception ex)
+            {
+                MelonLogger.Error($"[DynamicOrdersMod] OnCustomerDealCompleted error: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Called from Customer.onContractAssigned UnityEvent (subscribed by ModEntry).
+        /// This is a FALLBACK for when the Harmony patch on OfferContract doesn't bind.
+        /// </summary>
+        public void OnCustomerContractAssigned(
+            Il2CppScheduleOne.Economy.Customer customer,
+            Il2CppScheduleOne.Quests.Contract contract)
+        {
+            try
+            {
+                if (!IsInitialized || !ScalingEnabled) return;
+                if (!IsHost()) return;
+                if (customer == null || contract == null) return;
+
+                string guid = null;
+                try { guid = customer.NPC?.GUID.ToString(); } catch { }
+                string tag = "cust=" + DebugLog.Short(guid);
+                DebugLog.Msg(tag, "OnCustomerContractAssigned (UnityEvent fallback)");
+
+                var profile = CustomerProfileManager.GetOrCreateProfile(guid);
+                if (profile == null) return;
+
+                // Cache basic contract info on the profile for later patches
+                try
+                {
+                    var qty = contract.ProductList?.GetTotalQuantity() ?? 0;
+                    if (qty > 0) profile.LastRequestedQuantity = qty;
+                    var entry = contract.ProductList?.entries;
+                    if (entry != null && entry.Count > 0)
+                        profile.LastRequestedDrugType = entry[0].ProductID ?? "";
+                }
+                catch { }
+
+                DebugLog.Msg(tag,
+                    $"FALLBACK contract assigned payment=${contract.Payment:F2} " +
+                    $"qty={profile.LastRequestedQuantity}");
+            }
+            catch (System.Exception ex)
+            {
+                MelonLogger.Error($"[DynamicOrdersMod] OnCustomerContractAssigned error: {ex.Message}");
+            }
+        }
+
+        /// <summary>
         /// Called from SaveManagerPatches when the game writes its own save file.
         /// Mirrors the same write to the mod's saveData.json so the two never drift.
         /// Host-only: clients receive their state from the host, so they skip the write.
