@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using MelonLoader;
 using DynamicOrdersMod.Models;
 using DynamicOrdersMod.Persistence;
+using Il2CppScheduleOne.ItemFramework;
 using Il2CppScheduleOne.Quests;
+using Il2CppScheduleOne.Storage;
 
 namespace DynamicOrdersMod.Systems
 {
@@ -167,6 +169,164 @@ namespace DynamicOrdersMod.Systems
         }
 
         /// <summary>
+        /// Reads the actual contents of a dead drop's storage and computes the delivery result
+        /// against the expected contract terms. Handles all edge cases:
+        /// - Wrong product delivered → failure
+        /// - Partial quantity → proportional payment + relationship hit
+        /// - Higher quality than expected → payment bonus
+        /// - Lower quality than expected → customer bargains down (pays less)
+        /// - Nothing delivered → no payment, relationship hit, cooldown
+        /// </summary>
+        /// <returns>DeliveryResult with actual quantities, quality, and computed payment multiplier</returns>
+        public static DeliveryResult EvaluateDelivery(string dropGuid, string expectedProductID, int expectedQuality, int expectedQuantity, float contractPayment)
+        {
+            var result = new DeliveryResult { ActualQuantity = 0, HighestQuality = -1, PaymentMultiplier = 0f, Outcome = "no_delivery" };
+
+            if (string.IsNullOrEmpty(expectedProductID) || expectedQuantity <= 0) return result;
+
+            // Find the DeadDrop object by GUID
+            Il2CppScheduleOne.Deaddrop.DeadDrop drop = null;
+            try
+            {
+                var drops = Il2CppScheduleOne.Deaddrop.DeadDrop.DeadDrops;
+                if (drops != null)
+                {
+                    for (int i = 0; i < drops.Count; i++)
+                    {
+                        var d = drops[i];
+                        if (d == null) continue;
+                        if (d.GUID.ToString() == dropGuid) { drop = d; break; }
+                    }
+                }
+            }
+            catch { }
+            if (drop == null) return result;
+
+            // Read storage contents
+            List<ItemInstance> allItems = null;
+            try
+            {
+                if (drop.Storage != null)
+                    allItems = drop.Storage.GetAllItems();
+            }
+            catch { }
+            if (allItems == null || allItems.Count == 0) return result;
+
+            // Sum quantities of matching product, track highest quality
+            int actualQty = 0;
+            int highestQuality = -1;
+            bool foundCorrectProduct = false;
+            bool foundWrongProduct = false;
+
+            for (int i = 0; i < allItems.Count; i++)
+            {
+                var item = allItems[i];
+                if (item == null) continue;
+
+                // Try to get product ID and quality
+                string productID = "";
+                int quality = -1;
+                int quantity = 0;
+                try
+                {
+                    var def = item.Definition;
+                    if (def != null) productID = def.ID;
+                }
+                catch { }
+                try
+                {
+                    var qualityItem = item as Il2CppScheduleOne.ItemFramework.QualityItemInstance;
+                    if (qualityItem != null) quality = (int)qualityItem.Quality;
+                }
+                catch { }
+                try { quantity = item.GetTotalAmount(); }
+                catch { try { quantity = 1; } catch { } }
+
+                if (string.IsNullOrEmpty(productID)) continue;
+
+                if (productID == expectedProductID)
+                {
+                    foundCorrectProduct = true;
+                    actualQty += quantity;
+                    if (quality > highestQuality) highestQuality = quality;
+                }
+                else
+                {
+                    foundWrongProduct = true;
+                }
+            }
+
+            result.ActualQuantity = actualQty;
+            result.HighestQuality = highestQuality;
+
+            // Compute outcome and payment multiplier
+            if (actualQty == 0)
+            {
+                // Nothing matching delivered
+                result.Outcome = foundWrongProduct ? "wrong_product" : "no_delivery";
+                result.PaymentMultiplier = 0f;
+                return result;
+            }
+
+            // Quantity ratio (capped at 1.0 — over-delivery doesn't pay extra beyond contract)
+            float quantityRatio = Math.Min(1f, (float)actualQty / expectedQuantity);
+
+            // Quality multiplier: bargain system
+            float qualityMult = 1.0f;
+            if (highestQuality >= 0 && expectedQuality >= 0)
+            {
+                int qualityDiff = highestQuality - expectedQuality;
+                if (qualityDiff > 0)
+                {
+                    // Higher quality than expected → bonus (10% per quality tier above)
+                    qualityMult = 1f + (qualityDiff * 0.1f);
+                }
+                else if (qualityDiff < 0)
+                {
+                    // Lower quality → customer bargains down (20% per tier below, min 0.5x)
+                    qualityMult = Math.Max(0.5f, 1f + (qualityDiff * 0.2f));
+                }
+            }
+
+            result.PaymentMultiplier = quantityRatio * qualityMult;
+
+            if (actualQty < expectedQuantity)
+                result.Outcome = "partial";
+            else
+                result.Outcome = "success";
+
+            return result;
+        }
+
+        /// <summary>
+        /// Clears the contents of a dead drop's storage after resolution (items consumed).
+        /// </summary>
+        public static void ClearDropStorage(string dropGuid)
+        {
+            try
+            {
+                var drops = Il2CppScheduleOne.Deaddrop.DeadDrop.DeadDrops;
+                if (drops == null) return;
+                for (int i = 0; i < drops.Count; i++)
+                {
+                    var d = drops[i];
+                    if (d == null) continue;
+                    if (d.GUID.ToString() == dropGuid)
+                    {
+                        if (d.Storage != null)
+                            d.Storage.ClearContents();
+                        return;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                if (ConfigManager.Config.General.DebugLogging)
+                    MelonLogger.Warning($"[DynamicOrdersMod] ClearDropStorage failed: {ex.Message}");
+            }
+        }
+
+        /// <summary>
         /// Updates map POI labels with heat info. Called from OnDayEnd if config enabled.
         /// </summary>
         public static void UpdateMapLabels()
@@ -241,6 +401,25 @@ namespace DynamicOrdersMod.Systems
         {
             var state = GetState(dropGuid);
             return state?.Heat ?? 0f;
+        }
+
+        /// <summary>
+        /// Adjust heat on a drop. Positive = increase, negative = decrease. Clamped 0-1.
+        /// </summary>
+        public static void AddHeat(string dropGuid, float delta)
+        {
+            var state = GetState(dropGuid);
+            if (state == null) return;
+            state.Heat = Clamp01(state.Heat + delta);
+        }
+
+        /// <summary>
+        /// Marks a drop as no longer occupied (free for reuse).
+        /// </summary>
+        public static void ReleaseDrop(string dropGuid)
+        {
+            var state = GetState(dropGuid);
+            if (state != null) state.IsOccupied = false;
         }
 
         /// <summary>
@@ -326,5 +505,16 @@ namespace DynamicOrdersMod.Systems
         {
             return (float)_rng.NextDouble();
         }
+    }
+
+    /// <summary>
+    /// Result of evaluating a dead drop delivery against contract terms.
+    /// </summary>
+    public class DeliveryResult
+    {
+        public int ActualQuantity;
+        public int HighestQuality;     // -1 if no matching product found
+        public float PaymentMultiplier; // 0.0 = no pay, 1.0 = full pay, >1.0 = bonus
+        public string Outcome;         // "success"/"partial"/"no_delivery"/"wrong_product"
     }
 }

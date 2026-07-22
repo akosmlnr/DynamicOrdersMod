@@ -1,6 +1,10 @@
+using System;
+using System.Collections.Generic;
 using MelonLoader;
+using DynamicOrdersMod.Models;
 using DynamicOrdersMod.Persistence;
 using DynamicOrdersMod.Systems;
+using DynamicOrdersMod.UI;
 
 namespace DynamicOrdersMod.Core
 {
@@ -33,6 +37,7 @@ namespace DynamicOrdersMod.Core
                 DeadDropManager.UpdateHeat();
                 DeadDropManager.UpdateMapLabels();
                 EventManager.RollDailyEvents(currentDay);
+                ResolveDeadDropDeals(currentDay);
                 ProcessWeeklyWholesale(currentDay);
                 SaveManager.Save();
             }
@@ -40,6 +45,254 @@ namespace DynamicOrdersMod.Core
             {
                 MelonLogger.Error($"[DynamicOrdersMod] OnDayEnd error: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Resolves all dead drop deals whose window has passed.
+        /// Reads actual storage contents, computes proportional payment with quality bargain,
+        /// applies relationship changes, and handles all edge cases.
+        /// Host-authoritative.
+        /// </summary>
+        public void ResolveDeadDropDeals(int currentDay)
+        {
+            var deals = SaveManager.Data?.ActiveDeadDropDeals;
+            if (deals == null || deals.Count == 0) return;
+
+            var ddConfig = ConfigManager.Config.DeadDrop;
+            var toRemove = new List<DeadDropDeal>();
+
+            for (int i = 0; i < deals.Count; i++)
+            {
+                var deal = deals[i];
+                if (deal == null || deal.IsResolved) continue;
+                if (currentDay < deal.WindowDay) continue; // not yet time to resolve
+
+                try
+                {
+                    ResolveSingleDeal(deal, currentDay, ddConfig);
+                }
+                catch (System.Exception ex)
+                {
+                    MelonLogger.Error($"[DynamicOrdersMod] Deal {deal.DealId} resolution error: {ex.Message}");
+                    deal.IsResolved = true;
+                    deal.Result = "error";
+                }
+
+                // Keep resolved deals for 7 days for history, then remove
+                if (deal.IsResolved && currentDay - deal.ResolvedDay > 7)
+                    toRemove.Add(deal);
+            }
+
+            // Clean up old resolved deals
+            if (toRemove.Count > 0)
+            {
+                foreach (var d in toRemove) deals.Remove(d);
+            }
+        }
+
+        private void ResolveSingleDeal(DeadDropDeal deal, int currentDay, DeadDropConfig ddConfig)
+        {
+            deal.ResolvedDay = currentDay;
+            var profile = CustomerProfileManager.GetOrCreateProfile(deal.CustomerGuid);
+
+            // Evaluate what was actually delivered
+            var delivery = DeadDropManager.EvaluateDelivery(
+                deal.DropGuid, deal.ExpectedProductID, deal.ExpectedQuality,
+                deal.ExpectedQuantity, deal.Payment);
+
+            // Get drop state for heat/crackdown calculations
+            var dropState = DeadDropManager.GetDropHeat(deal.DropGuid);
+            string region = "";
+            try
+            {
+                var states = SaveManager.Data.DeadDropStates;
+                if (states != null && states.ContainsKey(deal.DropGuid))
+                    region = states[deal.DropGuid].Region;
+            }
+            catch { }
+
+            float actualPayment = 0f;
+            float relationshipChange = 0f;
+            string resultOutcome;
+
+            // Determine outcome based on delivery evaluation
+            if (delivery.Outcome == "no_delivery" || delivery.Outcome == "wrong_product")
+            {
+                // Nothing delivered or wrong product
+                resultOutcome = delivery.Outcome;
+                actualPayment = 0f;
+
+                if (deal.IsPrepaid)
+                {
+                    // Prepaid: customer already paid, player skipped delivery.
+                    // Penalty: relationship hit + cooldown (future dead drops less likely).
+                    relationshipChange = -0.15f;
+                    if (profile != null) profile.LastDeadDropFailDay = currentDay;
+                    NotificationHelper.Send("Dead Drop Missed",
+                        $"You didn't deliver to the dead drop. Customer is unhappy.", 8f);
+                }
+                else
+                {
+                    // Async: customer didn't get goods, no payment. Mild relationship hit.
+                    relationshipChange = -0.1f;
+                    if (profile != null) profile.LastDeadDropFailDay = currentDay;
+                    NotificationHelper.Send("Dead Drop Expired",
+                        $"Deal expired without delivery. No payment received.", 8f);
+                }
+
+                SaveManager.Data.Statistics.TotalDeadDropsFailed++;
+                if (profile != null) profile.RecordFailure();
+            }
+            else
+            {
+                // Something was delivered (success or partial) — now roll for events
+                // Police intercept: base * (1 + heat) * crackdown multiplier
+                float crackdownMult = 1f;
+                try
+                {
+                    if (EventManager.IsCrackdownActive(region))
+                        crackdownMult = ConfigManager.Config.Events.CrackdownDeadDropRiskMultiplier;
+                }
+                catch { }
+
+                float policeChance = ddConfig.PoliceInterceptBaseChance * (1f + dropState) * crackdownMult;
+                bool policeIntercept = UnityEngine.Random.value < policeChance;
+
+                bool theft = false;
+                bool nonPayment = false;
+
+                if (!policeIntercept)
+                {
+                    theft = UnityEngine.Random.value < ddConfig.TheftChance;
+                    if (!theft && !deal.IsPrepaid)
+                        nonPayment = UnityEngine.Random.value < ddConfig.NonPaymentChance;
+                }
+
+                if (policeIntercept)
+                {
+                    resultOutcome = "police";
+                    actualPayment = 0f;
+                    relationshipChange = -0.2f;
+                    DeadDropManager.AddHeat(deal.DropGuid, 0.5f);
+                    SaveManager.Data.Statistics.TotalDeadDropsFailed++;
+                    if (profile != null) profile.RecordFailure();
+                    NotificationHelper.Send("Police Intercept!",
+                        $"Police intercepted the dead drop delivery. Product and payment lost.", 10f);
+                }
+                else if (theft)
+                {
+                    resultOutcome = "theft";
+                    actualPayment = 0f;
+                    relationshipChange = -0.1f;
+                    DeadDropManager.AddHeat(deal.DropGuid, 0.3f);
+                    SaveManager.Data.Statistics.TotalDeadDropsFailed++;
+                    if (profile != null) profile.RecordFailure();
+                    NotificationHelper.Send("Dead Drop Robbed",
+                        $"Someone stole the product from the dead drop. Payment lost.", 10f);
+                }
+                else if (nonPayment)
+                {
+                    // Async only: customer refuses to pay
+                    resultOutcome = "nonpayment";
+                    actualPayment = 0f;
+                    relationshipChange = -0.15f;
+                    SaveManager.Data.Statistics.TotalDeadDropsFailed++;
+                    if (profile != null) profile.RecordFailure();
+                    if (profile != null) profile.LastDeadDropFailDay = currentDay;
+                    NotificationHelper.Send("Customer Skipped Town",
+                        $"Customer didn't show up to pay for the dead drop delivery.", 10f);
+                }
+                else
+                {
+                    // Success or partial delivery
+                    resultOutcome = delivery.Outcome;
+                    actualPayment = deal.Payment * delivery.PaymentMultiplier;
+                    actualPayment = (float)Math.Round(actualPayment, 2);
+
+                    if (delivery.Outcome == "success")
+                    {
+                        relationshipChange = ddConfig.SuccessRelationshipBonus;
+                        DeadDropManager.AddHeat(deal.DropGuid, -0.1f);
+                        SaveManager.Data.Statistics.TotalDeadDropsCompleted++;
+                        if (profile != null) profile.RecordSuccess();
+                    }
+                    else // partial
+                    {
+                        // Customer got less than expected — small relationship hit
+                        relationshipChange = -0.05f;
+                        DeadDropManager.AddHeat(deal.DropGuid, -0.05f);
+                        SaveManager.Data.Statistics.TotalDeadDropsCompleted++;
+                        if (profile != null) profile.RecordSuccess();
+                        NotificationHelper.Send("Dead Drop Partial",
+                            $"Partial delivery: ${actualPayment:F2} paid for {delivery.ActualQuantity}/{deal.ExpectedQuantity} units.", 8f);
+                    }
+
+                    // For prepaid: payment already deposited at creation.
+                    // For async: deposit payment now (minus what customer already committed).
+                    if (!deal.IsPrepaid && actualPayment > 0f)
+                    {
+                        try
+                        {
+                            var mm = Il2CppScheduleOne.Money.MoneyManager.Instance;
+                            if (mm != null)
+                                mm.ChangeCashBalance(actualPayment, true, true);
+                        }
+                        catch (Exception ex)
+                        {
+                            MelonLogger.Warning($"[DynamicOrdersMod] Payment deposit failed: {ex.Message}");
+                        }
+                    }
+                    // For prepaid with partial: no additional payment (already got full upfront)
+                    // The relationshipChange already reflects the customer's dissatisfaction
+                }
+            }
+
+            // Clear the dead drop storage (items consumed either way)
+            DeadDropManager.ClearDropStorage(deal.DropGuid);
+
+            // Apply relationship change
+            if (relationshipChange != 0f && profile != null)
+            {
+                try
+                {
+                    // Find the NPC and apply relationship change
+                    var customers = Il2CppScheduleOne.Economy.Customer.UnlockedCustomers;
+                    if (customers != null)
+                    {
+                        for (int i = 0; i < customers.Count; i++)
+                        {
+                            var cust = customers[i];
+                            if (cust == null) continue;
+                            string guid = null;
+                            try { guid = cust.NPC?.GUID.ToString(); } catch { }
+                            if (guid == deal.CustomerGuid)
+                            {
+                                cust.NPC.RelationData.ChangeRelationship(relationshipChange);
+                                break;
+                            }
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            // Free up the drop for reuse
+            DeadDropManager.ReleaseDrop(deal.DropGuid);
+
+            // Mark deal resolved
+            deal.IsResolved = true;
+            deal.Result = resultOutcome;
+            deal.ActualPayment = actualPayment;
+
+            // Clear profile's active dead drop pointer if it matches
+            if (profile != null && profile.ActiveDeadDropGuid == deal.DropGuid)
+            {
+                profile.ActiveDeadDropGuid = null;
+                profile.ActiveDeadDropPendingCompletion = false;
+            }
+
+            if (ConfigManager.Config.General.DebugLogging)
+                MelonLogger.Msg($"[DynamicOrdersMod] Deal {deal.DealId} resolved: {resultOutcome}, ${actualPayment:F2}");
         }
 
         public void ProcessWeeklyWholesale(int currentDay)
@@ -65,8 +318,7 @@ namespace DynamicOrdersMod.Core
                     float cut = baseRevenue * config.WeeklyRevenueCut;
                     totalRevenue += cut;
 
-                    // Track actual revenue via WholesaleRecord
-                    SaveManager.Data.WholesaleRecords.Add(new Models.WholesaleRecord
+                    SaveManager.Data.WholesaleRecords.Add(new WholesaleRecord
                     {
                         Week = currentDay / 7,
                         CustomerGuid = profile.CustomerGuid,
@@ -80,18 +332,19 @@ namespace DynamicOrdersMod.Core
                     {
                         var moneyManager = Il2CppScheduleOne.Money.MoneyManager.Instance;
                         if (moneyManager != null)
-                            moneyManager.ChangeCashBalance(totalRevenue, false, false);
+                            moneyManager.ChangeCashBalance((float)Math.Round(totalRevenue, 2), false, false);
                     }
                     catch (System.Exception ex)
                     {
                         MelonLogger.Warning($"[DynamicOrdersMod] Wholesale revenue deposit failed: {ex.Message}");
                     }
 
+                    SaveManager.Data.Statistics.TotalWholesaleRevenue += totalRevenue;
+
                     if (ConfigManager.Config.General.DebugLogging)
                         MelonLogger.Msg($"[DynamicOrdersMod] Weekly wholesale revenue: ${totalRevenue:F2}");
                 }
 
-                // Trim old wholesale records (keep last 52 weeks)
                 try
                 {
                     if (SaveManager.Data.WholesaleRecords.Count > 520)
