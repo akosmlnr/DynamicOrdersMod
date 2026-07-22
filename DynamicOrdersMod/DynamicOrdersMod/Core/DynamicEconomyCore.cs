@@ -94,21 +94,9 @@ namespace DynamicOrdersMod.Core
                 DebugLog.Msg(tag,
                     $"contract.onComplete payment=${payment:F2} qty={qty}");
 
-                // The Customer.onDealCompleted handler will record the purchase;
-                // this handler is mainly observability + cross-check.
-                // If Customer.onDealCompleted doesn't fire (edge case), record here as backup.
-                var profile = CustomerProfileManager.GetOrCreateProfile(customerGuid);
-                if (profile != null && profile.LifetimeDeals == 0)
-                {
-                    // Backup: no prior recording happened
-                    int currentDay = 0;
-                    try { currentDay = Il2CppScheduleOne.GameTime.TimeManager.Instance.ElapsedDays; }
-                    catch { }
-                    profile.RecordPurchase(currentDay, profile.LastRequestedDrugType ?? "", qty, payment);
-                    profile.RecordSuccess();
-                    DebugLog.Msg(tag, $"BACKUP recording (Customer.onDealCompleted didn't fire)");
-                    SaveManager.Save();
-                }
+                // Observability only — ProcessHandoverPatch handles purchase recording,
+                // tolerance growth, and overdose rolls. This handler confirms the contract
+                // completed successfully via UnityEvent (fallback signal if Harmony misses).
             }
             catch (System.Exception ex)
             {
@@ -194,101 +182,7 @@ namespace DynamicOrdersMod.Core
                 string guid = null;
                 try { guid = customer.NPC?.GUID.ToString(); } catch { }
                 string tag = "cust=" + DebugLog.Short(guid);
-                DebugLog.Msg(tag, "OnCustomerDealCompleted (UnityEvent)");
-
-                var profile = CustomerProfileManager.GetOrCreateProfile(guid);
-                if (profile == null) return;
-
-                int currentDay = 0;
-                try { currentDay = Il2CppScheduleOne.GameTime.TimeManager.Instance.ElapsedDays; }
-                catch { }
-
-                // Try to read live contract data first (may still be available)
-                float payment = 0f;
-                int qty = profile.LastRequestedQuantity > 0 ? profile.LastRequestedQuantity : 1;
-                try
-                {
-                    var contract = customer.CurrentContract;
-                    if (contract != null)
-                    {
-                        payment = contract.Payment;
-                        var pl = contract.ProductList;
-                        if (pl != null)
-                        {
-                            int liveQty = pl.GetTotalQuantity();
-                            if (liveQty > 0) qty = liveQty;
-                        }
-                    }
-                }
-                catch { }
-
-                // Cache addiction for decay formula
-                try { profile.LastKnownAddiction = customer.CurrentAddiction; } catch { }
-
-                // Apply pending hospital-release relationship hit if any
-                try { CustomerProfileManager.ApplyPendingRelationshipHit(profile, customer.NPC); }
-                catch { }
-
-                // Record the deal
-                profile.RecordPurchase(currentDay, profile.LastRequestedDrugType ?? "", qty, payment);
-                profile.RecordSuccess();
-
-                // Tolerance growth (using cached expected quantity)
-                try
-                {
-                    CustomerProfileManager.ApplyToleranceGrowth(
-                        profile, qty, qty, customer.CurrentAddiction);
-                }
-                catch { }
-
-                // Overdose roll (conservative — without item-level potency data, use addiction as proxy)
-                try
-                {
-                    bool shouldRoll = qty > 0;
-                    if (shouldRoll && profile.OverdoseGraceUntilDay > 0 && currentDay < profile.OverdoseGraceUntilDay)
-                    {
-                        DebugLog.Msg(tag, $"overdose roll skipped: grace period (until day {profile.OverdoseGraceUntilDay})");
-                        shouldRoll = false;
-                    }
-                    if (shouldRoll)
-                    {
-                        float quantityFactor = profile.LastRequestedQuantity > 0
-                            ? (float)qty / System.Math.Max(1, profile.LastRequestedQuantity)
-                            : 1f;
-                        // Use the customer's current addiction as potency proxy (no item data available here)
-                        float potencyProxy = customer.CurrentAddiction;
-                        float chance = EventManager.CalculateOverdoseChance(
-                            profile, 0f, potencyProxy, customer.CurrentAddiction, quantityFactor);
-                        float roll = UnityEngine.Random.value;
-                        if (chance > 0f && roll < chance)
-                        {
-                            DebugLog.Msg(tag,
-                                $"OVERDOSE ROLL: chance={chance:F4} roll={roll:F4} -> YES " +
-                                $"(qtyFactor={quantityFactor:F2} potency_proxy={potencyProxy:F2})");
-                            bool overdosed = EventManager.ResolveOverdose(profile, currentDay);
-                            if (overdosed && profile.OverdoseCount >= 2)
-                            {
-                                try
-                                {
-                                    customer.NPC.RelationData.ChangeRelationship(
-                                        -ConfigManager.Config.Overdose.SecondOverdoseRelationshipHit);
-                                }
-                                catch { }
-                            }
-                        }
-                        else if (chance > 0f)
-                        {
-                            DebugLog.Msg(tag, $"overdose roll: chance={chance:F4} roll={roll:F4} -> NO");
-                        }
-                    }
-                }
-                catch { }
-
-                DebugLog.Msg(tag,
-                    $"deal completed qty={qty} payment=${payment:F2} " +
-                    $"lifetime={profile.LifetimeDeals} successful={profile.SuccessfulDeals} " +
-                    $"tolerance={profile.Tolerance:F3}");
-                SaveManager.Save();
+                DebugLog.Msg(tag, "onDealCompleted (UnityEvent fallback) — tolerance/overdose handled by ProcessHandoverPatch");
             }
             catch (System.Exception ex)
             {
@@ -323,128 +217,7 @@ namespace DynamicOrdersMod.Core
                 string guid = null;
                 try { guid = customer.NPC?.GUID.ToString(); } catch { }
                 string tag = "cust=" + DebugLog.Short(guid);
-                DebugLog.Msg(tag, "OnCustomerContractAssigned (UnityEvent)");
-
-                var profile = CustomerProfileManager.GetOrCreateProfile(guid);
-                if (profile == null) return;
-
-                // Skip scaling for hospitalized/refusing customers
-                int currentDay = 0;
-                try { currentDay = Il2CppScheduleOne.GameTime.TimeManager.Instance.ElapsedDays; }
-                catch { }
-                if (currentDay > 0 && !CustomerProfileManager.IsCustomerAvailable(profile, currentDay))
-                {
-                    string reason = profile.IsHospitalized ? "hospitalized" : "in refusal window";
-                    DebugLog.Msg(tag, $"skipped: {reason} (release_day={profile.HospitalReleaseDay})");
-                    return;
-                }
-
-                // Extract base quantity and drug type from the contract
-                int baseQuantity = 1;
-                string drugType = "";
-                try
-                {
-                    if (contract.ProductList?.entries != null && contract.ProductList.entries.Count > 0)
-                    {
-                        baseQuantity = contract.ProductList.GetTotalQuantity();
-                        if (baseQuantity <= 0) baseQuantity = 1;
-                        drugType = contract.ProductList.entries[0].ProductID ?? "";
-                        profile.LastRequestedDrugType = drugType;
-                        profile.LastRequestedQuantity = baseQuantity;
-                    }
-                }
-                catch { }
-
-                // Cache addiction for tolerance decay formula
-                try { profile.LastKnownAddiction = customer.CurrentAddiction; } catch { }
-
-                float addiction = 0f;
-                try { addiction = customer.CurrentAddiction; } catch { }
-                float normalizedRel = 0f;
-                try { normalizedRel = customer.NPC?.RelationData?.NormalizedRelationDelta ?? 0f; } catch { }
-
-                // Compute scaled quantity
-                int seed = ScalingEngine.HashToSeed(guid ?? "", currentDay);
-                int scaled = ScalingEngine.CalculateScaledQuantity(
-                    baseQuantity, addiction, normalizedRel, profile.Tolerance,
-                    ConfigManager.Config.Scaling, seed);
-
-                // Apply event order reduction
-                string region = "";
-                try { region = customer.NPC?.Region.ToString() ?? ""; } catch { }
-                float reduction = EventManager.GetOrderReduction(drugType, region);
-                int preEventScaled = scaled;
-                scaled = System.Math.Max(1, (int)(scaled * reduction));
-
-                // Wholesale multiplier
-                bool wholesaleApplied = false;
-                if (CustomerProfileManager.MeetsWholesaleRequirements(profile) &&
-                    normalizedRel >= ConfigManager.Config.Wholesale.MinRelationship)
-                {
-                    scaled = (int)(scaled * ConfigManager.Config.Wholesale.BulkOrderMultiplier);
-                    wholesaleApplied = true;
-                    if (!profile.IsWholesale)
-                    {
-                        profile.IsWholesale = true;
-                        profile.WholesaleWeeksActive = 0;
-                        DebugLog.Msg(tag, "WHOLESALE first-time activation");
-                        try { SaveManager.Save(); } catch { }
-                    }
-                }
-
-                // MUTATE the contract's ProductList in-place (scale each entry proportionally)
-                if (scaled != baseQuantity && contract.ProductList?.entries != null)
-                {
-                    try
-                    {
-                        float ratio = (float)scaled / baseQuantity;
-                        for (int i = 0; i < contract.ProductList.entries.Count; i++)
-                        {
-                            var entry = contract.ProductList.entries[i];
-                            if (entry == null) continue;
-                            int orig = entry.Quantity;
-                            int newQty = System.Math.Max(1, (int)System.Math.Round(orig * ratio));
-                            entry.Quantity = newQty;
-                        }
-                    }
-                    catch (System.Exception ex)
-                    {
-                        DebugLog.Warn(tag, $"ProductList mutation failed: {ex.Message}");
-                    }
-                }
-
-                // Scale the payment via PricingEngine
-                float basePayment = contract.Payment;
-                float finalPayment = basePayment;
-                try
-                {
-                    finalPayment = PricingEngine.CalculateCustomerPrice(
-                        basePayment,
-                        addiction,
-                        profile.SuccessfulDeals,
-                        ConfigManager.Config.Pricing,
-                        SaveManager.Data.ActiveEvents,
-                        drugType,
-                        ConfigManager.Config.Events.ShortagePriceIncrease);
-                    finalPayment = (float)System.Math.Round(finalPayment, 2);
-                    contract.Payment = finalPayment;
-                }
-                catch (System.Exception ex)
-                {
-                    DebugLog.Warn(tag, $"pricing failed: {ex.Message}");
-                    finalPayment = basePayment;
-                }
-
-                // Full breakdown log
-                DebugLog.Msg(tag,
-                    $"contract scaled product={drugType} base_qty={baseQuantity} " +
-                    $"addiction={addiction:F2} rel={normalizedRel:F2} tol={profile.Tolerance:F2} " +
-                    $"seed={seed} pre_event={preEventScaled} event_reduction={reduction:F2} " +
-                    $"wholesale={(wholesaleApplied ? "YES" : "NO")} -> scaled={scaled} " +
-                    $"payment=${finalPayment:F2} (base=${basePayment:F2})");
-
-                // Save the profile state
-                try { SaveManager.Save(); } catch { }
+                DebugLog.Msg(tag, "onContractAssigned (UnityEvent fallback) — scaling handled by OfferContractPatch");
             }
             catch (System.Exception ex)
             {

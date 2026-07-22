@@ -42,58 +42,6 @@ namespace DynamicOrdersMod.Core
                 LoggerInstance.Error($"[DynamicOrdersMod v3] Failed to apply Harmony patches: {ex.Message}");
                 LoggerInstance.Error(ex);
             }
-
-            // DIAGNOSTIC: log which patches actually bound to real methods.
-            LogPatchBindingStatus(HarmonyInstance);
-        }
-
-        /// <summary>
-        /// For each intended target method, query Harmony to see if any patches are bound.
-        /// Methods that didn't bind show zero patches — meaning the attribute didn't match
-        /// a real method on the Il2Cpp type.
-        /// </summary>
-        private void LogPatchBindingStatus(HarmonyLib.Harmony harmony)
-        {
-            try
-            {
-                var targets = new[]
-                {
-                    // Old targets (for continued verification)
-                    ("Customer.OfferContract", typeof(Il2CppScheduleOne.Economy.Customer), "OfferContract"),
-                    ("Customer.ProcessHandover", typeof(Il2CppScheduleOne.Economy.Customer), "ProcessHandover"),
-                    ("Contract.Complete", typeof(Il2CppScheduleOne.Quests.Contract), "Complete"),
-                    ("SaveManager.Save()", typeof(Il2CppScheduleOne.Persistence.SaveManager), "Save"),
-                    // New probe targets
-                    ("PROBE: Contract.InitializeContract", typeof(Il2CppScheduleOne.Quests.Contract), "InitializeContract"),
-                    ("PROBE: Dealer.ContractedOffered", typeof(Il2CppScheduleOne.Economy.Dealer), "ContractedOffered"),
-                };
-                foreach (var (label, type, methodName) in targets)
-                {
-                    try
-                    {
-                        var method = HarmonyLib.AccessTools.Method(type, methodName);
-                        if (method != null)
-                        {
-                            var info = HarmonyLib.PatchProcessor.GetPatchInfo(method);
-                            int pre = info?.Prefixes?.Count ?? 0;
-                            int post = info?.Postfixes?.Count ?? 0;
-                            MelonLogger.Msg($"[Diagnostic] {label}: BOUND (prefixes={pre}, postfixes={post})");
-                        }
-                        else
-                        {
-                            MelonLogger.Msg($"[Diagnostic] {label}: METHOD NOT FOUND via AccessTools");
-                        }
-                    }
-                    catch (System.Exception ex)
-                    {
-                        MelonLogger.Msg($"[Diagnostic] {label}: ERROR {ex.Message}");
-                    }
-                }
-            }
-            catch (System.Exception ex)
-            {
-                MelonLogger.Error($"[Diagnostic] Status log failed: {ex.Message}");
-            }
         }
 
         /// <summary>
