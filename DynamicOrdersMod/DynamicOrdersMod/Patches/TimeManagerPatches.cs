@@ -6,7 +6,14 @@ using DynamicOrdersMod.Core;
 
 namespace DynamicOrdersMod.Patches
 {
-    [HarmonyPatch(typeof(TimeManager), "EndSleep")]
+    /// <summary>
+    /// Schedule I has no EndSleep method. Sleep flow is:
+    ///   StartSleep() -> SkipForwardToTime() -> ElapsedDays increments
+    /// We hook StartSleep (an ObserversRpc that fires on all clients when sleep begins).
+    /// Postfix runs with ElapsedDays still at the day that's about to end, which is
+    /// the correct semantic for "OnDayEnd" processing (decay, events, deal resolution).
+    /// </summary>
+    [HarmonyPatch(typeof(TimeManager), "StartSleep")]
     public static class TimeManagerPatches
     {
         static void Postfix(TimeManager __instance)
@@ -20,7 +27,7 @@ namespace DynamicOrdersMod.Patches
             }
             catch (Exception ex)
             {
-                MelonLogger.Error($"[DynamicOrdersMod] EndSleep error: {ex.Message}");
+                MelonLog.Error($"[DynamicOrdersMod] StartSleep postfix error: {ex.Message}");
             }
         }
     }
